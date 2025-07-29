@@ -1,0 +1,420 @@
+<!DOCTYPE html> <html lang="en"> <head> <meta http-equiv="Content-Type" content="text/html; charset=UTF-8"> <meta charset="utf-8"> <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no"> <meta http-equiv="X-UA-Compatible" content="IE=edge"> <title> Fine-tuning protein language model with Huggingface (Part 2) | Leerang Yang </title> <meta name="author" content="Leerang Yang"> <meta name="description" content="Practical workflow for fine-tuning with Huggingface"> <meta name="keywords" content="Leerang"> <link rel="stylesheet" href="/assets/css/bootstrap.min.css?a4b3f509e79c54a512b890d73235ef04"> <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/mdbootstrap@4.20.0/css/mdb.min.css" integrity="sha256-jpjYvU3G3N6nrrBwXJoVEYI/0zw8htfFnhT9ljN3JJw=" crossorigin="anonymous"> <link defer rel="stylesheet" href="/assets/css/academicons.min.css?f0b7046b84e425c55f3463ac249818f5"> <link defer rel="stylesheet" href="/assets/css/scholar-icons.css?62b2ac103a88034e6882a5be5f3e2772"> <link defer rel="stylesheet" type="text/css" href="https://fonts.googleapis.com/css?family=Roboto:300,400,500,700|Roboto+Slab:100,300,400,500,700|Material+Icons&amp;display=swap"> <link defer rel="stylesheet" href="/assets/css/jekyll-pygments-themes-github.css?591dab5a4e56573bf4ef7fd332894c99" media="" id="highlight_theme_light"> <link rel="stylesheet" href="/assets/css/main.css?d41d8cd98f00b204e9800998ecf8427e"> <link rel="canonical" href="https://leerang77.github.io/blog/2025/foundation-model2/"> <script src="/assets/js/theme.js?a81d82887dd692e91686b43de4542f18"></script> <link defer rel="stylesheet" href="/assets/css/jekyll-pygments-themes-native.css?5847e5ed4a4568527aa6cfab446049ca" media="none" id="highlight_theme_dark"> <script>
+    initTheme();
+  </script> </head> <body class="fixed-top-nav "> <header> <nav id="navbar" class="navbar navbar-light navbar-expand-sm fixed-top" role="navigation"> <div class="container"> <a class="navbar-brand title font-weight-lighter" href="/"> <span class="font-weight-bold">Leerang</span> Yang </a> <button class="navbar-toggler collapsed ml-auto" type="button" data-toggle="collapse" data-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation"> <span class="sr-only">Toggle navigation</span> <span class="icon-bar top-bar"></span> <span class="icon-bar middle-bar"></span> <span class="icon-bar bottom-bar"></span> </button> <div class="collapse navbar-collapse text-right" id="navbarNav"> <ul class="navbar-nav ml-auto flex-nowrap"> <li class="nav-item "> <a class="nav-link" href="/">about </a> </li> <li class="nav-item active"> <a class="nav-link" href="/blog/">blog </a> </li> <li class="nav-item "> <a class="nav-link" href="/publications/">publications </a> </li> <li class="nav-item "> <a class="nav-link" href="/cv/">cv </a> </li> <li class="toggle-container"> <button id="light-toggle" title="Change theme"> <i class="ti ti-sun-moon" id="light-toggle-system"></i> <i class="ti ti-moon-filled" id="light-toggle-dark"></i> <i class="ti ti-sun-filled" id="light-toggle-light"></i> </button> </li> </ul> </div> </div> </nav> <progress id="progress" value="0"> <div class="progress-container"> <span class="progress-bar"></span> </div> </progress> </header> <div class="container mt-5" role="main"> <div class="post"> <header class="post-header"> <h1 class="post-title">Fine-tuning protein language model with Huggingface (Part 2)</h1> <p class="post-meta"> Created on July 27, 2025 </p> <p class="post-tags"> <a href="/blog/2025"> <i class="fa-solid fa-calendar fa-sm"></i> 2025 </a>   ·   <a href="/blog/tag/protein-language-model"> <i class="fa-solid fa-hashtag fa-sm"></i> protein-language-model</a>   ·   <a href="/blog/category/bio-ml"> <i class="fa-solid fa-tag fa-sm"></i> Bio-ML</a> </p> </header> <article class="post-content"> <div id="markdown-content"> <h1 id="intro"><strong>Intro</strong></h1> <p>In Part 1 of the post, I went over motivation and intuition for fine-tuning pLMs, distinguished task-adaptive fine-tuning from domain-adaptive pretraining, introduced parameter-efficient fine-tuning, and briefly introduced Huggingface. This post will be go more in-depth on examples of fine-tuning code with Huggingface libraries. Specifically, we will cover:</p> <ol> <li><strong>Practical examples and workflow of fine-tuning code with Huggingface libraries</strong></li> <li><strong>Parameter-efficient fine-tuning with Hugginface PEFT library</strong></li> </ol> <h1 id="code-for-full-parameter-fine-tuning"><strong>Code for full parameter fine-tuning</strong></h1> <p>Below, I will show the code for four steps necessary for pLM fine-tuning, using Huggingface libraries.</p> <ol> <li>Defining the prediction head to be used with pLM</li> <li>Defining the main model that wires pLM and task model together</li> <li>Defining the data module</li> <li>Defining the optimizer and trainer</li> </ol> <h2 id="1-defining-the-prediction-head-to-be-used-with-plm"><strong>1. Defining the prediction head to be used with pLM</strong></h2> <p>For task-adaptive fine-tuning, we need a prediction head. Let’s define <code class="language-plaintext highlighter-rouge">MLPCHead</code> that can handle both residue-level and protein-level prediction tasks, and both embedding-mean and cls-token pooling strategies if protein-level prediction is used. The MLP architecture is a simple template here, and any other prediction task model (e.g. graph-based models) can be defined similarly.</p> <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="sh">"""</span><span class="s">
+Example prediction task model with MLP architecture
+</span><span class="sh">"""</span>
+<span class="kn">import</span> <span class="n">torch.nn</span> <span class="k">as</span> <span class="n">nn</span>
+
+<span class="k">class</span> <span class="nc">MLPHead</span><span class="p">(</span><span class="n">nn</span><span class="p">.</span><span class="n">Module</span><span class="p">):</span>
+    <span class="sh">"""</span><span class="s">Modular MLP head with configurable pooling method.
+    Supports per-protein (mean or CLS) or per-residue classification.</span><span class="sh">"""</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span>
+        <span class="n">self</span><span class="p">,</span>
+        <span class="n">input_dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>         <span class="c1"># Should match the pLM embedding dimension
+</span>        <span class="n">hidden_dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>        <span class="c1"># Hidden layer dimensions
+</span>        <span class="n">output_dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>        <span class="c1"># Number of classes (1 if regression)
+</span>        <span class="n">num_hidden_layers</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span> <span class="c1"># Variable number of hidden layers in MLP
+</span>        <span class="n">dropout_rate</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.1</span><span class="p">,</span>  <span class="c1"># Dropout rate
+</span>        <span class="n">classification_mode</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="sh">"</span><span class="s">protein</span><span class="sh">"</span><span class="p">,</span> <span class="c1"># 'protein' or 'residue'
+</span>        <span class="n">pooling_strategy</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="sh">"</span><span class="s">mean</span><span class="sh">"</span><span class="p">,</span>       <span class="c1"># 'mean' or 'cls' when protein-level
+</span>    <span class="p">):</span>
+        <span class="sh">"""</span><span class="s">
+        Initializes the MLP prediction head.
+        </span><span class="sh">"""</span>
+        <span class="nf">super</span><span class="p">().</span><span class="nf">__init__</span><span class="p">()</span>
+        <span class="c1"># Define classification mode
+</span>        <span class="k">assert</span> <span class="n">classification_mode</span> <span class="ow">in</span> <span class="p">(</span>
+            <span class="sh">"</span><span class="s">protein</span><span class="sh">"</span><span class="p">,</span>
+            <span class="sh">"</span><span class="s">residue</span><span class="sh">"</span><span class="p">,</span>
+        <span class="p">),</span> <span class="sh">"</span><span class="s">classification_mode must be </span><span class="sh">'</span><span class="s">protein</span><span class="sh">'</span><span class="s"> or </span><span class="sh">'</span><span class="s">residue</span><span class="sh">'"</span>
+        <span class="c1"># Define pooling strategy
+</span>        <span class="k">if</span> <span class="n">classification_mode</span><span class="o">==</span><span class="sh">"</span><span class="s">protein</span><span class="sh">"</span><span class="p">:</span>
+		        <span class="k">assert</span> <span class="n">pooling_strategy</span> <span class="ow">in</span> <span class="p">(</span>
+		            <span class="sh">"</span><span class="s">mean</span><span class="sh">"</span><span class="p">,</span>
+		            <span class="sh">"</span><span class="s">cls</span><span class="sh">"</span><span class="p">,</span>
+		        <span class="p">),</span> <span class="sh">"</span><span class="s">pooling_strategy must be </span><span class="sh">'</span><span class="s">mean</span><span class="sh">'</span><span class="s"> or </span><span class="sh">'</span><span class="s">cls</span><span class="sh">'"</span>
+        <span class="n">self</span><span class="p">.</span><span class="n">classification_mode</span> <span class="o">=</span> <span class="n">classification_mode</span>
+        <span class="n">self</span><span class="p">.</span><span class="n">pooling_strategy</span> <span class="o">=</span> <span class="n">pooling_strategy</span>
+
+        <span class="c1"># Define the architecture with the input num_hidden_layers
+</span>        <span class="n">self</span><span class="p">.</span><span class="n">output_dim</span> <span class="o">=</span> <span class="n">output_dim</span>
+        <span class="n">dims</span> <span class="o">=</span> <span class="p">[</span><span class="n">input_dim</span><span class="p">]</span> <span class="o">+</span> <span class="p">[</span><span class="n">hidden_dim</span><span class="p">]</span> <span class="o">*</span> <span class="n">num_hidden_layers</span> <span class="o">+</span> <span class="p">[</span><span class="n">output_dim</span><span class="p">]</span>
+        <span class="n">layers</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">nn</span><span class="p">.</span><span class="n">Module</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nf">range</span><span class="p">(</span><span class="nf">len</span><span class="p">(</span><span class="n">dims</span><span class="p">)</span> <span class="o">-</span> <span class="mi">2</span><span class="p">):</span>
+            <span class="n">layers</span><span class="p">.</span><span class="nf">append</span><span class="p">(</span><span class="n">nn</span><span class="p">.</span><span class="nc">Dropout</span><span class="p">(</span><span class="n">dropout_rate</span><span class="p">))</span>
+            <span class="n">layers</span><span class="p">.</span><span class="nf">append</span><span class="p">(</span><span class="n">nn</span><span class="p">.</span><span class="nc">Linear</span><span class="p">(</span><span class="n">dims</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">dims</span><span class="p">[</span><span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">]))</span>
+            <span class="n">layers</span><span class="p">.</span><span class="nf">append</span><span class="p">(</span><span class="n">nn</span><span class="p">.</span><span class="nc">Tanh</span><span class="p">())</span>
+        <span class="n">layers</span><span class="p">.</span><span class="nf">append</span><span class="p">(</span><span class="n">nn</span><span class="p">.</span><span class="nc">Dropout</span><span class="p">(</span><span class="n">dropout_rate</span><span class="p">))</span>
+        <span class="n">layers</span><span class="p">.</span><span class="nf">append</span><span class="p">(</span><span class="n">nn</span><span class="p">.</span><span class="nc">Linear</span><span class="p">(</span><span class="n">dims</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">],</span> <span class="n">dims</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]))</span>
+        <span class="n">self</span><span class="p">.</span><span class="n">mlp</span> <span class="o">=</span> <span class="n">nn</span><span class="p">.</span><span class="nc">Sequential</span><span class="p">(</span><span class="o">*</span><span class="n">layers</span><span class="p">)</span>
+
+
+    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span>
+        <span class="n">self</span><span class="p">,</span>
+        <span class="n">hidden_states</span><span class="p">:</span> <span class="n">torch</span><span class="p">.</span><span class="n">FloatTensor</span><span class="p">,</span>
+        <span class="n">attention_mask</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">torch</span><span class="p">.</span><span class="n">FloatTensor</span><span class="p">]</span> <span class="o">=</span> <span class="bp">None</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="p">.</span><span class="n">FloatTensor</span><span class="p">:</span>
+        <span class="sh">"""</span><span class="s">
+        Forward pass for the MLP head.
+        </span><span class="sh">"""</span>
+        <span class="k">if</span> <span class="n">self</span><span class="p">.</span><span class="n">classification_mode</span> <span class="o">==</span> <span class="sh">"</span><span class="s">protein</span><span class="sh">"</span><span class="p">:</span> <span class="c1"># Protein-level prediction
+</span>            <span class="k">if</span> <span class="n">self</span><span class="p">.</span><span class="n">pooling_strategy</span> <span class="o">==</span> <span class="sh">"</span><span class="s">cls</span><span class="sh">"</span><span class="p">:</span> <span class="c1"># BERT-style 'cls' token
+</span>                <span class="n">x</span> <span class="o">=</span> <span class="n">hidden_states</span><span class="p">[:,</span> <span class="mi">0</span><span class="p">,</span> <span class="p">:]</span>
+            <span class="k">else</span><span class="p">:</span> <span class="c1"># Use mean of embeddings 
+</span>                <span class="k">if</span> <span class="n">attention_mask</span> <span class="ow">is</span> <span class="ow">not</span> <span class="bp">None</span><span class="p">:</span> <span class="c1"># Exclude padding from the mean
+</span>                    <span class="n">mask</span> <span class="o">=</span> <span class="n">attention_mask</span><span class="p">.</span><span class="nf">unsqueeze</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+                    <span class="n">masked</span> <span class="o">=</span> <span class="n">hidden_states</span> <span class="o">*</span> <span class="n">mask</span>
+                    <span class="n">sum_hidden</span> <span class="o">=</span> <span class="n">masked</span><span class="p">.</span><span class="nf">sum</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+                    <span class="n">lengths</span> <span class="o">=</span> <span class="n">mask</span><span class="p">.</span><span class="nf">sum</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">).</span><span class="nf">clamp</span><span class="p">(</span><span class="nb">min</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+                    <span class="n">x</span> <span class="o">=</span> <span class="n">sum_hidden</span> <span class="o">/</span> <span class="n">lengths</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="n">x</span> <span class="o">=</span> <span class="n">hidden_states</span><span class="p">.</span><span class="nf">mean</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">self</span><span class="p">.</span><span class="nf">mlp</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+
+        <span class="k">else</span><span class="p">:</span> <span class="c1"># Residue-level prediction
+</span>            <span class="n">B</span><span class="p">,</span> <span class="n">L</span><span class="p">,</span> <span class="n">D</span> <span class="o">=</span> <span class="n">hidden_states</span><span class="p">.</span><span class="n">shape</span>
+            <span class="n">flat</span> <span class="o">=</span> <span class="n">hidden_states</span><span class="p">.</span><span class="nf">view</span><span class="p">(</span><span class="n">B</span> <span class="o">*</span> <span class="n">L</span><span class="p">,</span> <span class="n">D</span><span class="p">)</span>
+            <span class="n">logits_flat</span> <span class="o">=</span> <span class="n">self</span><span class="p">.</span><span class="nf">mlp</span><span class="p">(</span><span class="n">flat</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">logits_flat</span><span class="p">.</span><span class="nf">view</span><span class="p">(</span><span class="n">B</span><span class="p">,</span> <span class="n">L</span><span class="p">,</span> <span class="n">self</span><span class="p">.</span><span class="n">output_dim</span><span class="p">)</span>
+</code></pre></div></div> <h2 id="2-defining-the-main-model"><strong>2. Defining the main model</strong></h2> <p>Now that we have the prediction head, we need to define a model class that wires the prediction head and pLM together so that we can backpropagate through both during the supervised training. In the below example, we define a model that can be used with both protein-level and residue-level prediction, and both classification and regression tasks. As mentioned in the previous post, each of these cases require different loss functions. To help with this, let’s first define <code class="language-plaintext highlighter-rouge">TaskType</code> Enum class.</p> <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">class</span> <span class="nc">TaskType</span><span class="p">(</span><span class="n">Enum</span><span class="p">):</span>
+    <span class="sh">"""</span><span class="s">
+    Enum representing different task types for the prediction head.
+    </span><span class="sh">"""</span>
+    <span class="n">SEQ_CLASSIFICATION</span>   <span class="o">=</span> <span class="sh">"</span><span class="s">seq_classification</span><span class="sh">"</span>
+    <span class="n">SEQ_REGRESSION</span>       <span class="o">=</span> <span class="sh">"</span><span class="s">seq_regression</span><span class="sh">"</span>
+    <span class="n">TOKEN_CLASSIFICATION</span> <span class="o">=</span> <span class="sh">"</span><span class="s">token_classification</span><span class="sh">"</span>
+    <span class="n">TOKEN_REGRESSION</span>     <span class="o">=</span> <span class="sh">"</span><span class="s">token_regression</span><span class="sh">"</span>
+</code></pre></div></div> <p>Now let’s define <code class="language-plaintext highlighter-rouge">PLMTaskModel</code> class which is our main model. It first uses <code class="language-plaintext highlighter-rouge">AutoModel</code> to load the specified pre-trained pLM and assign it to <code class="language-plaintext highlighter-rouge">self.backbone</code>. The <code class="language-plaintext highlighter-rouge">forward()</code> method first extracts embedding using <code class="language-plaintext highlighter-rouge">self.backbone</code> and then calls the prediction head using the <code class="language-plaintext highlighter-rouge">last hidden_states</code>, along with other <code class="language-plaintext highlighter-rouge">kwargs</code> required by the prediction task model. For example, if the prediciton head is a graph-based model, the graphs may be passed as additional arguments.</p> <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">from</span> <span class="n">typing</span> <span class="kn">import</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Callable</span><span class="p">,</span> <span class="n">Any</span>
+
+<span class="kn">import</span> <span class="n">torch.nn</span> <span class="k">as</span> <span class="n">nn</span>
+<span class="kn">from</span> <span class="n">transformers</span> <span class="kn">import</span> <span class="p">(</span>
+    <span class="n">AutoConfig</span><span class="p">,</span>
+    <span class="n">AutoModel</span><span class="p">,</span>
+    <span class="n">PreTrainedModel</span><span class="p">,</span>
+    <span class="n">SequenceClassifierOutput</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="k">def</span> <span class="nf">PLMTaskModel</span><span class="p">(</span><span class="n">PreTrainedModel</span><span class="p">):</span>
+    <span class="sh">"""</span><span class="s">General model for sequence/token classification and regression.</span><span class="sh">"""</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span>
+        <span class="n">self</span><span class="p">,</span>
+        <span class="n">task_type</span><span class="p">:</span> <span class="n">TaskType</span><span class="p">,</span>
+        <span class="n">backbone_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+        <span class="n">head</span><span class="p">:</span> <span class="n">nn</span><span class="p">.</span><span class="n">Module</span><span class="p">,</span>
+    <span class="p">):</span>
+        <span class="sh">"""</span><span class="s">
+        Initializes the PLMTaskModel with a backbone model, a head for task-specific processing,
+        and an optional preprocessing function.
+        
+        Args:
+            task_type (TaskType): Type of the task (e.g., SEQ_CLASSIFICATION, TOKEN_CLASSIFICATION).
+            backbone_name (str): Name of the pretrained model backbone.
+            head (nn.Module): Task-specific head to be used on top of the backbone.
+            preprocess_fn (Callable[[str], str]): Function to preprocess input sequences.
+        </span><span class="sh">"""</span>
+        <span class="c1"># Load the config and backbone
+</span>        <span class="n">config</span> <span class="o">=</span> <span class="n">AutoConfig</span><span class="p">.</span><span class="nf">from_pretrained</span><span class="p">(</span><span class="n">backbone_name</span><span class="p">)</span>
+        <span class="n">backbone</span> <span class="o">=</span> <span class="n">AutoModel</span><span class="p">.</span><span class="nf">from_pretrained</span><span class="p">(</span><span class="n">backbone_name</span><span class="p">,</span> <span class="n">config</span><span class="o">=</span><span class="n">config</span><span class="p">)</span>
+        
+        <span class="c1"># Call the PretrainedModel constructor
+</span>        <span class="nf">super</span><span class="p">().</span><span class="nf">__init__</span><span class="p">(</span><span class="n">config</span><span class="p">)</span>
+        
+        <span class="c1"># Attach the modules
+</span>        <span class="n">self</span><span class="p">.</span><span class="n">backbone</span> <span class="o">=</span> <span class="n">backbone</span> <span class="c1"># Assigns the pretrained weights
+</span>        <span class="n">self</span><span class="p">.</span><span class="n">head</span> <span class="o">=</span> <span class="n">head</span> <span class="c1"># Assigns the prediction head
+</span>        <span class="n">self</span><span class="p">.</span><span class="n">task_type</span> <span class="o">=</span> <span class="n">task_type</span>
+    
+    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span>
+        <span class="n">self</span><span class="p">,</span>
+        <span class="n">input_ids</span><span class="p">:</span> <span class="n">torch</span><span class="p">.</span><span class="n">LongTensor</span><span class="p">,</span>
+        <span class="n">attention_mask</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">torch</span><span class="p">.</span><span class="n">FloatTensor</span><span class="p">]</span> <span class="o">=</span> <span class="bp">None</span><span class="p">,</span>
+        <span class="n">labels</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">torch</span><span class="p">.</span><span class="n">LongTensor</span><span class="p">]</span> <span class="o">=</span> <span class="bp">None</span><span class="p">,</span>
+        <span class="n">output_hidden_states</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="bp">False</span><span class="p">,</span>
+        <span class="n">output_attentions</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="bp">False</span><span class="p">,</span>
+        <span class="o">**</span><span class="n">head_args</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">SequenceClassifierOutput</span><span class="p">:</span>
+        <span class="sh">"""</span><span class="s">
+        Forward pass for the PLMTaskModel.
+        
+        Args:
+            input_ids (torch.LongTensor): Input token IDs.
+            attention_mask (Optional[torch.FloatTensor]): Attention mask.
+            labels (Optional[torch.LongTensor]): Labels for classification tasks.
+            **head_args (Any): Additional arguments for the head.
+        Returns:
+            SequenceClassifierOutput: Output of the model including logits and loss if labels are provided.
+        </span><span class="sh">"""</span>
+        <span class="c1"># Compute embedding
+</span>        <span class="n">outputs</span> <span class="o">=</span> <span class="n">self</span><span class="p">.</span><span class="nf">backbone</span><span class="p">(</span>
+            <span class="n">input_ids</span><span class="o">=</span><span class="n">input_ids</span><span class="p">,</span>
+            <span class="n">attention_mask</span><span class="o">=</span><span class="n">attention_mask</span><span class="p">,</span>
+            <span class="n">return_dict</span><span class="o">=</span><span class="bp">True</span><span class="p">,</span>
+            <span class="n">output_hidden_states</span><span class="o">=</span><span class="n">output_hidden_states</span><span class="p">,</span>
+            <span class="n">output_attentions</span><span class="o">=</span><span class="n">output_attentions</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">hidden_states</span> <span class="o">=</span> <span class="n">outputs</span><span class="p">.</span><span class="n">last_hidden_state</span>
+        <span class="n">logits</span> <span class="o">=</span> <span class="n">self</span><span class="p">.</span><span class="nf">head</span><span class="p">(</span><span class="n">hidden_states</span><span class="p">,</span> <span class="n">attention_mask</span><span class="o">=</span><span class="n">attention_mask</span><span class="p">,</span> <span class="o">**</span><span class="n">head_args</span><span class="p">)</span>
+        
+        <span class="c1"># Compute loss
+</span>        <span class="n">loss</span> <span class="o">=</span> <span class="bp">None</span>
+        <span class="k">if</span> <span class="n">labels</span> <span class="ow">is</span> <span class="ow">not</span> <span class="bp">None</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">self</span><span class="p">.</span><span class="n">task_type</span> <span class="o">==</span> <span class="n">TaskType</span><span class="p">.</span><span class="n">TOKEN_REGRESSION</span><span class="p">:</span>
+                <span class="c1"># logits: (batch, seq_len, 1) → squeeze
+</span>                <span class="n">preds</span> <span class="o">=</span> <span class="n">logits</span><span class="p">.</span><span class="nf">squeeze</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>                    <span class="c1"># (batch, seq_len)
+</span>                <span class="c1"># build a mask of the real (non-pad) tokens
+</span>                <span class="n">mask</span>  <span class="o">=</span> <span class="n">attention_mask</span><span class="p">.</span><span class="nf">to</span><span class="p">(</span><span class="n">preds</span><span class="p">.</span><span class="n">dtype</span><span class="p">)</span>        <span class="c1"># 1.0 for real tokens, 0.0 for pads
+</span>    
+                <span class="c1"># compute squared error only on real tokens
+</span>                <span class="n">se</span>    <span class="o">=</span> <span class="p">(</span><span class="n">preds</span> <span class="o">-</span> <span class="n">labels</span><span class="p">.</span><span class="nf">float</span><span class="p">())</span> <span class="o">**</span> <span class="mi">2</span>         <span class="c1"># (batch, seq_len)
+</span>                <span class="n">loss</span>  <span class="o">=</span> <span class="p">(</span><span class="n">se</span> <span class="o">*</span> <span class="n">mask</span><span class="p">).</span><span class="nf">sum</span><span class="p">()</span> <span class="o">/</span> <span class="n">mask</span><span class="p">.</span><span class="nf">sum</span><span class="p">()</span>        <span class="c1"># mean over real positions
+</span>    
+            <span class="k">elif</span> <span class="n">self</span><span class="p">.</span><span class="n">task_type</span> <span class="o">==</span> <span class="n">TaskType</span><span class="p">.</span><span class="n">TOKEN_CLASSIFICATION</span><span class="p">:</span>
+                    <span class="c1"># logits: (batch, seq_len, num_labels)
+</span>                <span class="n">loss</span> <span class="o">=</span> <span class="n">nn</span><span class="p">.</span><span class="nc">CrossEntropyLoss</span><span class="p">(</span><span class="n">ignore_index</span><span class="o">=-</span><span class="mi">100</span><span class="p">)(</span>
+                    <span class="n">logits</span><span class="p">.</span><span class="nf">view</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="n">logits</span><span class="p">.</span><span class="nf">size</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)),</span>
+                    <span class="n">labels</span><span class="p">.</span><span class="nf">view</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">),</span>
+                <span class="p">)</span>
+    
+            <span class="k">elif</span> <span class="n">self</span><span class="p">.</span><span class="n">task_type</span> <span class="o">==</span> <span class="n">TaskType</span><span class="p">.</span><span class="n">SEQ_REGRESSION</span><span class="p">:</span>
+                    <span class="c1"># logits: (batch, 1)
+</span>                <span class="n">loss</span> <span class="o">=</span> <span class="n">nn</span><span class="p">.</span><span class="nc">MSELoss</span><span class="p">()(</span><span class="n">logits</span><span class="p">.</span><span class="nf">squeeze</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">),</span> <span class="n">labels</span><span class="p">.</span><span class="nf">float</span><span class="p">())</span>
+    
+            <span class="k">else</span><span class="p">:</span>  <span class="c1"># SEQ_CLASSIFICATION
+</span>                    <span class="c1"># logits: (batch, num_labels)
+</span>                <span class="n">loss</span> <span class="o">=</span> <span class="n">nn</span><span class="p">.</span><span class="nc">CrossEntropyLoss</span><span class="p">()(</span>
+                    <span class="n">logits</span><span class="p">.</span><span class="nf">view</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="n">logits</span><span class="p">.</span><span class="nf">size</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)),</span>
+                    <span class="n">labels</span><span class="p">.</span><span class="nf">view</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">),</span>
+                <span class="p">)</span>
+     
+        <span class="k">return</span> <span class="nc">SequenceClassifierOutput</span><span class="p">(</span>
+            <span class="n">loss</span><span class="o">=</span><span class="n">loss</span><span class="p">,</span>
+            <span class="n">logits</span><span class="o">=</span><span class="n">logits</span><span class="p">,</span>
+            <span class="n">hidden_states</span><span class="o">=</span><span class="n">outputs</span><span class="p">.</span><span class="n">hidden_states</span>   <span class="k">if</span> <span class="n">output_hidden_states</span> <span class="k">else</span> <span class="bp">None</span><span class="p">,</span>
+            <span class="n">attentions</span><span class="o">=</span><span class="n">outputs</span><span class="p">.</span><span class="n">attentions</span>         <span class="k">if</span> <span class="n">output_attentions</span>    <span class="k">else</span> <span class="bp">None</span><span class="p">,</span>
+        <span class="p">)</span>
+</code></pre></div></div> <p>Now we have our model. Next, we define our data module.</p> <h2 id="3-defining-the-data-module"><strong>3. Defining the data module</strong></h2> <p>We define the data module that loads, preprocesses, and tokenizes the data. To make it modular and compatible with various pLMs, we use the huggingface <code class="language-plaintext highlighter-rouge">AutoTokenizer</code> as input so that the appropriate model-specific tokenizer can be passed. It also use <code class="language-plaintext highlighter-rouge">preprocess_fn</code> as an optional input to handle any model-specific quirk (e.g. for ProtBert model, a function that adds a space between amino acids) inside the data module. We return the training, validation and optional test datasets as Huggingface <code class="language-plaintext highlighter-rouge">Dataset</code> objects, within a single <code class="language-plaintext highlighter-rouge">DatasetDict</code> object.</p> <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">from</span> <span class="n">typing</span> <span class="kn">import</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Callable</span><span class="p">,</span> <span class="n">List</span>
+
+<span class="kn">from</span> <span class="n">transformers</span> <span class="kn">import</span> <span class="n">AutoTokenizer</span>
+<span class="kn">from</span> <span class="n">datasets</span> <span class="kn">import</span> <span class="n">load_dataset</span><span class="p">,</span> <span class="n">Dataset</span><span class="p">,</span> <span class="n">DatasetDict</span>
+
+<span class="k">class</span> <span class="nc">ProteinDataModule</span><span class="p">:</span>
+    <span class="sh">"""</span><span class="s">
+    Data module for protein sequence datasets, handling loading, preprocessing,
+    and tokenization using Hugging Face</span><span class="sh">'</span><span class="s">s datasets library.
+    This module supports training, validation, and optional test datasets.
+    </span><span class="sh">"""</span>
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span>
+        <span class="n">self</span><span class="p">,</span>
+        <span class="n">train_file</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+        <span class="n">val_file</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+        <span class="n">tokenizer</span><span class="p">:</span> <span class="n">AutoTokenizer</span><span class="p">,</span>
+        <span class="n">preprocess_fn</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Callable</span><span class="p">[[</span><span class="nb">str</span><span class="p">],</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="bp">None</span><span class="p">,</span>
+        <span class="n">max_length</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1024</span><span class="p">,</span>
+        <span class="n">test_file</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="bp">None</span><span class="p">,</span>
+        <span class="n">optional_features</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="bp">None</span><span class="p">,</span>
+
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">DatasetDict</span><span class="p">:</span>
+        <span class="sh">"""</span><span class="s">
+        Initializes the ProteinDataModule with training and validation files,
+        a tokenizer, and optional preprocessing function and optional test file.
+        Args:
+            train_file (str): Path to the training dataset file.
+            val_file (str): Path to the validation dataset file.
+            tokenizer (AutoTokenizer): Tokenizer for processing sequences.
+            preprocess_fn (Optional[Callable[[str], str]]): Function to preprocess sequences.
+            max_length (int): Maximum length for tokenized sequences.
+            test_file (Optional[str]): Path to the test dataset file, if available.
+            optional_features (Optional[List[str]]): Additional features to include in the dataset.
+        </span><span class="sh">"""</span>
+        <span class="n">self</span><span class="p">.</span><span class="n">tokenizer</span> <span class="o">=</span> <span class="n">tokenizer</span>
+        <span class="n">self</span><span class="p">.</span><span class="n">preprocess_fn</span> <span class="o">=</span> <span class="n">preprocess_fn</span>
+        <span class="n">self</span><span class="p">.</span><span class="n">max_length</span> <span class="o">=</span> <span class="n">max_length</span>
+        <span class="n">self</span><span class="p">.</span><span class="n">optional_features</span> <span class="o">=</span> <span class="n">optional_features</span> <span class="k">if</span> <span class="n">optional_features</span> <span class="k">else</span> <span class="p">[]</span>
+        <span class="n">files</span> <span class="o">=</span> <span class="p">{</span><span class="sh">"</span><span class="s">train</span><span class="sh">"</span><span class="p">:</span> <span class="n">train_file</span><span class="p">,</span> <span class="sh">"</span><span class="s">validation</span><span class="sh">"</span><span class="p">:</span> <span class="n">val_file</span><span class="p">}</span>
+        <span class="k">if</span> <span class="n">test_file</span><span class="p">:</span>
+            <span class="n">files</span><span class="p">[</span><span class="sh">"</span><span class="s">test</span><span class="sh">"</span><span class="p">]</span> <span class="o">=</span> <span class="n">test_file</span>
+        <span class="n">raw</span> <span class="o">=</span> <span class="nf">load_dataset</span><span class="p">(</span><span class="sh">"</span><span class="s">csv</span><span class="sh">"</span><span class="p">,</span> <span class="n">data_files</span><span class="o">=</span><span class="n">files</span><span class="p">)</span>
+
+        <span class="k">def</span> <span class="nf">preprocess</span><span class="p">(</span><span class="n">examples</span><span class="p">):</span>
+            <span class="sh">"""</span><span class="s">
+            Preprocesses the input examples by applying the preprocessing function
+            and tokenizing the sequences.
+            </span><span class="sh">"""</span>
+            <span class="n">seqs</span> <span class="o">=</span> <span class="n">examples</span><span class="p">[</span><span class="sh">"</span><span class="s">sequence</span><span class="sh">"</span><span class="p">]</span>
+            <span class="k">if</span> <span class="n">self</span><span class="p">.</span><span class="n">preprocess_fn</span><span class="p">:</span> <span class="c1"># Optional preprocessing step (e.g. Add space for ProtBert)
+</span>                <span class="n">seqs</span> <span class="o">=</span> <span class="p">[</span><span class="n">self</span><span class="p">.</span><span class="nf">preprocess_fn</span><span class="p">(</span><span class="n">s</span><span class="p">)</span> <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="n">seqs</span><span class="p">]</span>
+            <span class="n">tokenized</span> <span class="o">=</span> <span class="n">self</span><span class="p">.</span><span class="nf">tokenizer</span><span class="p">(</span>
+                <span class="n">seqs</span><span class="p">,</span>
+                <span class="n">truncation</span><span class="o">=</span><span class="bp">True</span><span class="p">,</span>
+                <span class="n">max_length</span><span class="o">=</span><span class="n">self</span><span class="p">.</span><span class="n">max_length</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="k">if</span> <span class="sh">"</span><span class="s">label</span><span class="sh">"</span> <span class="ow">in</span> <span class="n">examples</span><span class="p">:</span>
+                <span class="n">tokenized</span><span class="p">[</span><span class="sh">"</span><span class="s">labels</span><span class="sh">"</span><span class="p">]</span> <span class="o">=</span> <span class="n">examples</span><span class="p">[</span><span class="sh">"</span><span class="s">label</span><span class="sh">"</span><span class="p">]</span>
+            <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="n">self</span><span class="p">.</span><span class="n">optional_features</span><span class="p">:</span> <span class="c1"># Optional keys for additional features (e.g. graph)
+</span>                <span class="k">if</span> <span class="n">key</span> <span class="ow">in</span> <span class="n">examples</span><span class="p">:</span>
+                    <span class="n">tokenized</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="n">examples</span><span class="p">[</span><span class="n">key</span><span class="p">]</span>
+            <span class="k">return</span> <span class="n">tokenized</span>
+
+        <span class="n">self</span><span class="p">.</span><span class="n">datasets</span> <span class="o">=</span> <span class="n">raw</span><span class="p">.</span><span class="nf">map</span><span class="p">(</span><span class="n">preprocess</span><span class="p">,</span> <span class="n">batched</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">get_datasets</span><span class="p">(</span><span class="n">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">DatasetDict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Dataset</span><span class="p">]:</span>
+        <span class="sh">"""</span><span class="s">
+        Returns the processed datasets for training, validation, and optional test.
+        Returns:
+            DatasetDict[str, Dataset]: Dictionary containing the processed datasets.
+        </span><span class="sh">"""</span>
+        <span class="k">return</span> <span class="n">self</span><span class="p">.</span><span class="n">datasets</span>
+</code></pre></div></div> <p>Here’s an example of loading and preprocessing a dataset:</p> <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="sh">"""</span><span class="s">
+    Example for creating dataset to be used with ProtBert
+</span><span class="sh">"""</span>
+
+<span class="c1"># 1. Define a preprocessing function that upper-cases and spaces out residues
+</span><span class="k">def</span> <span class="nf">ProtBert_preprocess</span><span class="p">(</span><span class="n">seq</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="sh">"""</span><span class="s">
+    Turn a contiguous amino-acid string into uppercase
+    letters separated by spaces.
+    E.g. </span><span class="sh">"</span><span class="s">mkta</span><span class="sh">"</span><span class="s"> → </span><span class="sh">"</span><span class="s">M K T A</span><span class="sh">"</span><span class="s">
+    </span><span class="sh">"""</span>
+    <span class="n">seq</span> <span class="o">=</span> <span class="n">seq</span><span class="p">.</span><span class="nf">strip</span><span class="p">().</span><span class="nf">upper</span><span class="p">()</span>
+    <span class="k">return</span> <span class="sh">"</span><span class="s"> </span><span class="sh">"</span><span class="p">.</span><span class="nf">join</span><span class="p">(</span><span class="nf">list</span><span class="p">(</span><span class="n">seq</span><span class="p">))</span>
+
+<span class="c1"># 2. Load ProtBert’s tokenizer (it expects space-separated amino acids)
+</span><span class="n">tokenizer</span> <span class="o">=</span> <span class="n">AutoTokenizer</span><span class="p">.</span><span class="nf">from_pretrained</span><span class="p">(</span>
+    <span class="sh">"</span><span class="s">Rostlab/prot_bert</span><span class="sh">"</span><span class="p">,</span>
+    <span class="n">do_lower_case</span><span class="o">=</span><span class="bp">False</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="c1"># 3. Instantiate your ProteinDataModule, pointing at CSVs with a "sequence" column
+</span><span class="n">ProtBert_data_module</span> <span class="o">=</span> <span class="nc">ProteinDataModule</span><span class="p">(</span>
+    <span class="n">train_file</span><span class="o">=</span><span class="sh">"</span><span class="s">data/train.csv</span><span class="sh">"</span><span class="p">,</span>
+    <span class="n">val_file</span><span class="o">=</span><span class="sh">"</span><span class="s">data/val.csv</span><span class="sh">"</span><span class="p">,</span>
+    <span class="n">tokenizer</span><span class="o">=</span><span class="n">tokenizer</span><span class="p">,</span>
+    <span class="n">preprocess_fn</span><span class="o">=</span><span class="n">ProtBert_preprocess</span><span class="p">,</span>
+    <span class="n">max_length</span><span class="o">=</span><span class="mi">1024</span><span class="p">,</span>
+    <span class="n">test_file</span><span class="o">=</span><span class="sh">"</span><span class="s">data/test.csv</span><span class="sh">"</span><span class="p">,</span>     <span class="c1"># optional
+</span><span class="p">)</span>
+
+<span class="c1"># 4. Get the tokenized DatasetDict
+</span><span class="n">ProtBert_datasets</span><span class="p">:</span> <span class="n">DatasetDict</span> <span class="o">=</span> <span class="n">data_module</span><span class="p">.</span><span class="nf">get_datasets</span><span class="p">()</span>
+</code></pre></div></div> <h2 id="4-defining-the-optimizer-and-trainer"><strong>4. Defining the optimizer and trainer</strong></h2> <p>Now that we have defined the model and the dataset, we now need to define optimizer and trainer, and optionally a scheduler for the optimizer. While we can do this with Pytorch, once again Hugginface provides a <code class="language-plaintext highlighter-rouge">Trainer</code> class that simplifies the process. The <code class="language-plaintext highlighter-rouge">Trainer</code> class in addition enables simplified workflow for distributed training and mixed-precision handling as well.</p> <p><code class="language-plaintext highlighter-rouge">Trainer</code> class actually by default implements AdamW optimizer and a linear scheduler with warmup and decay, so there’s no need to explicitly define them. It is highly customizable through the use of <code class="language-plaintext highlighter-rouge">TrainingArguments</code> class that is supplied as input to the trainer. <a href="https://huggingface.co/docs/transformers/en/main_classes/trainer" rel="external nofollow noopener" target="_blank">Trainer documentation</a> from Huggingface shows there are <strong>118</strong> parameters that can be passed to TrainingArguments.</p> <p>In this example, we will assume that we have written a metrics module with get_compute_metrics_fn that returns appropriate metrics function given the model task type. We use huggingface <code class="language-plaintext highlighter-rouge">DataCollatorWithPadding</code> or <code class="language-plaintext highlighter-rouge">DataCollatorForTokenClassificaiton</code> to implement per-batch dynamic padding to the length of the longest sequence in each batch. If we have We then use huggingface <code class="language-plaintext highlighter-rouge">Trainer</code> module, with <code class="language-plaintext highlighter-rouge">TrainingArguments</code> definition. By doing so, we can use pre-defined <code class="language-plaintext highlighter-rouge">trainer.train()</code> and <code class="language-plaintext highlighter-rouge">trainer.evaluate()</code> methods to simplify training.</p> <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="sh">"""</span><span class="s">
+Trainer Module
+</span><span class="sh">"""</span>
+<span class="kn">from</span> <span class="n">typing</span> <span class="kn">import</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Dict</span>
+<span class="kn">from</span> <span class="n">datasets</span> <span class="kn">import</span> <span class="n">Dataset</span>
+<span class="kn">from</span> <span class="n">transformers</span> <span class="kn">import</span> <span class="p">(</span>
+    <span class="n">AutoTokenizer</span><span class="p">,</span>
+    <span class="n">Trainer</span><span class="p">,</span>
+    <span class="n">TrainingArguments</span><span class="p">,</span>
+    <span class="n">DataCollatorWithPadding</span><span class="p">,</span>
+    <span class="n">DataCollatorForTokenClassification</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="c1"># from metrics import get_compute_metrics_fn
+</span><span class="kn">from</span> <span class="n">plft.metrics</span> <span class="kn">import</span> <span class="n">get_compute_metrics_fn</span>
+<span class="kn">from</span> <span class="n">plft.model</span> <span class="kn">import</span> <span class="n">PLMTaskModel</span>
+<span class="kn">from</span> <span class="n">plft.config</span> <span class="kn">import</span> <span class="n">TaskType</span>
+
+<span class="k">class</span> <span class="nc">ProteinTaskTrainer</span><span class="p">:</span>
+    <span class="sh">"""</span><span class="s">
+    Trainer for protein sequence tasks, handling training and evaluation
+    using Hugging Face</span><span class="sh">'</span><span class="s">s Trainer API.
+    </span><span class="sh">"""</span>
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span>
+        <span class="n">self</span><span class="p">,</span>
+        <span class="n">model</span><span class="p">:</span> <span class="n">PLMTaskModel</span><span class="p">,</span>
+        <span class="n">train_dataset</span><span class="p">:</span> <span class="n">Dataset</span><span class="p">,</span>
+        <span class="n">eval_dataset</span><span class="p">:</span> <span class="n">Dataset</span><span class="p">,</span>
+        <span class="n">test_dataset</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dataset</span><span class="p">],</span>
+        <span class="n">tokenizer</span><span class="p">:</span> <span class="n">AutoTokenizer</span><span class="p">,</span>
+        <span class="n">output_dir</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+        <span class="n">num_train_epochs</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">100</span><span class="p">,</span>
+        <span class="n">per_device_train_batch_size</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">8</span><span class="p">,</span>
+        <span class="n">learning_rate</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-4</span><span class="p">,</span>
+    <span class="p">):</span>
+        <span class="sh">"""</span><span class="s">
+        Initializes the ProteinTaskTrainer with model, datasets, tokenizer, and training parameters.
+        </span><span class="sh">"""</span>
+        <span class="n">self</span><span class="p">.</span><span class="n">model</span>         <span class="o">=</span> <span class="n">model</span>
+        <span class="n">self</span><span class="p">.</span><span class="n">train_dataset</span> <span class="o">=</span> <span class="n">train_dataset</span>
+        <span class="n">self</span><span class="p">.</span><span class="n">eval_dataset</span>  <span class="o">=</span> <span class="n">eval_dataset</span>
+        <span class="n">self</span><span class="p">.</span><span class="n">test_dataset</span>  <span class="o">=</span> <span class="n">test_dataset</span>
+
+        <span class="c1"># pick the right collator:
+</span>        <span class="c1"># for residue-classification, pad labels to -100 so CrossEntropyLoss(ignore_index=-100) skips them
+</span>        <span class="c1"># for everything else (seq-classification, seq-/residue-regression), plain padding is sufficient
+</span>        <span class="k">if</span> <span class="n">self</span><span class="p">.</span><span class="n">model</span><span class="p">.</span><span class="n">task_type</span> <span class="o">==</span> <span class="n">TaskType</span><span class="p">.</span><span class="n">TOKEN_CLASSIFICATION</span><span class="p">:</span>
+            <span class="n">self</span><span class="p">.</span><span class="n">data_collator</span> <span class="o">=</span> <span class="nc">DataCollatorForTokenClassification</span><span class="p">(</span>
+                <span class="n">tokenizer</span><span class="p">,</span>
+                <span class="n">label_pad_token_id</span><span class="o">=-</span><span class="mi">100</span><span class="p">,</span>
+            <span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">self</span><span class="p">.</span><span class="n">data_collator</span> <span class="o">=</span> <span class="nc">DataCollatorWithPadding</span><span class="p">(</span><span class="n">tokenizer</span><span class="p">)</span>
+
+        <span class="n">compute_metrics</span> <span class="o">=</span> <span class="nf">get_compute_metrics_fn</span><span class="p">(</span><span class="n">self</span><span class="p">.</span><span class="n">model</span><span class="p">.</span><span class="n">task_type</span><span class="p">)</span> <span class="c1"># Get the appropriate metrics function based on task type
+</span>
+        <span class="c1"># Initialize the Trainer
+</span>        <span class="n">args</span> <span class="o">=</span> <span class="nc">TrainingArguments</span><span class="p">(</span>
+            <span class="n">output_dir</span><span class="o">=</span><span class="n">output_dir</span><span class="p">,</span>
+            <span class="n">num_train_epochs</span><span class="o">=</span><span class="n">num_train_epochs</span><span class="p">,</span>
+            <span class="n">per_device_train_batch_size</span><span class="o">=</span><span class="n">per_device_train_batch_size</span><span class="p">,</span>
+            <span class="n">per_device_eval_batch_size</span><span class="o">=</span><span class="n">per_device_train_batch_size</span><span class="p">,</span>
+            <span class="n">eval_strategy</span><span class="o">=</span><span class="sh">"</span><span class="s">epoch</span><span class="sh">"</span><span class="p">,</span>
+            <span class="n">save_strategy</span><span class="o">=</span><span class="sh">"</span><span class="s">epoch</span><span class="sh">"</span><span class="p">,</span>
+            <span class="n">learning_rate</span><span class="o">=</span><span class="n">learning_rate</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">self</span><span class="p">.</span><span class="n">trainer</span> <span class="o">=</span> <span class="nc">Trainer</span><span class="p">(</span>
+            <span class="n">model</span><span class="o">=</span><span class="n">self</span><span class="p">.</span><span class="n">model</span><span class="p">,</span>
+            <span class="n">args</span><span class="o">=</span><span class="n">args</span><span class="p">,</span>
+            <span class="n">tokenizer</span><span class="o">=</span><span class="n">tokenizer</span><span class="p">,</span>
+            <span class="n">train_dataset</span><span class="o">=</span><span class="n">self</span><span class="p">.</span><span class="n">train_dataset</span><span class="p">,</span>
+            <span class="n">eval_dataset</span><span class="o">=</span><span class="n">self</span><span class="p">.</span><span class="n">eval_dataset</span><span class="p">,</span>
+            <span class="n">data_collator</span><span class="o">=</span><span class="n">self</span><span class="p">.</span><span class="n">data_collator</span><span class="p">,</span>
+            <span class="n">compute_metrics</span><span class="o">=</span><span class="n">compute_metrics</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">train</span><span class="p">(</span><span class="n">self</span><span class="p">):</span>
+        <span class="sh">"""</span><span class="s">
+        Train the model using the huggingface Trainer module.
+        </span><span class="sh">"""</span>
+        <span class="k">return</span> <span class="n">self</span><span class="p">.</span><span class="n">trainer</span><span class="p">.</span><span class="nf">train</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="nf">evaluate</span><span class="p">(</span><span class="n">self</span><span class="p">,</span> <span class="n">split</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="sh">"</span><span class="s">validation</span><span class="sh">"</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">]:</span>
+        <span class="sh">"""</span><span class="s">
+        Evaluate the model on the specified dataset split (train, validation, or test).
+        Args:
+            split (str): The dataset split to evaluate on. Can be </span><span class="sh">"</span><span class="s">train</span><span class="sh">"</span><span class="s">, </span><span class="sh">"</span><span class="s">validation</span><span class="sh">"</span><span class="s">, or </span><span class="sh">"</span><span class="s">test</span><span class="sh">"</span><span class="s">.
+        Returns:
+            Dict[str, float]: A dictionary containing evaluation metrics.
+        </span><span class="sh">"""</span>
+        <span class="k">if</span> <span class="n">split</span> <span class="o">==</span> <span class="sh">"</span><span class="s">train</span><span class="sh">"</span><span class="p">:</span>
+            <span class="n">ds</span> <span class="o">=</span> <span class="n">self</span><span class="p">.</span><span class="n">train_dataset</span>
+        <span class="k">elif</span> <span class="n">split</span> <span class="o">==</span> <span class="sh">"</span><span class="s">validation</span><span class="sh">"</span><span class="p">:</span>
+            <span class="n">ds</span> <span class="o">=</span> <span class="n">self</span><span class="p">.</span><span class="n">eval_dataset</span>
+        <span class="k">elif</span> <span class="n">split</span> <span class="o">==</span> <span class="sh">"</span><span class="s">test</span><span class="sh">"</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">self</span><span class="p">.</span><span class="n">test_dataset</span> <span class="ow">is</span> <span class="bp">None</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="nc">ValueError</span><span class="p">(</span><span class="sh">"</span><span class="s">No test dataset provided.</span><span class="sh">"</span><span class="p">)</span>
+            <span class="n">ds</span> <span class="o">=</span> <span class="n">self</span><span class="p">.</span><span class="n">test_dataset</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="nc">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="sh">"</span><span class="s">Unknown split: </span><span class="si">{</span><span class="n">split</span><span class="si">}</span><span class="sh">"</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">self</span><span class="p">.</span><span class="n">trainer</span><span class="p">.</span><span class="nf">evaluate</span><span class="p">(</span><span class="n">eval_dataset</span><span class="o">=</span><span class="n">ds</span><span class="p">)</span>
+</code></pre></div></div> <h1 id="parameter-efficient-fine-tuning-with-peft-library"><strong>Parameter-efficient fine tuning with PEFT library</strong></h1> <p>Now that we have defined the model, datamodule, and trainer, we are almost ready for training. But there is one thing still missing: implementing parameter-efficient fine-tuning. In the previous post we briefly mentioned what it is, and that we will focus on Low Rank Adaptation (LoRA) method. Huggingface PEFT library makes the implementation of LoRA incredibly simple, so let’s look at the code first.</p> <div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kn">from</span> <span class="n">peft</span> <span class="kn">import</span> <span class="n">LoraConfig</span><span class="p">,</span> <span class="n">get_peft_model</span>
+
+<span class="n">base_model</span> <span class="o">=</span> <span class="nc">PLMTaskModel</span><span class="p">(...)</span> 
+
+<span class="c1"># Create a LoRA config.
+</span><span class="n">lora_config</span> <span class="o">=</span> <span class="nc">LoraConfig</span><span class="p">(</span>
+    <span class="n">r</span><span class="o">=</span><span class="mi">8</span><span class="p">,</span>                         <span class="c1"># LoRA rank
+</span>    <span class="n">lora_alpha</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span>               <span class="c1"># scaling
+</span>    <span class="n">target_modules</span><span class="o">=</span><span class="p">[</span><span class="sh">"</span><span class="s">q_proj</span><span class="sh">"</span><span class="p">,</span>    <span class="c1"># which modules to inject into
+</span>                    <span class="sh">"</span><span class="s">v_proj</span><span class="sh">"</span><span class="p">],</span>  
+    <span class="n">dropout</span><span class="o">=</span><span class="mf">0.05</span><span class="p">,</span>                <span class="c1"># optional
+</span>    <span class="n">bias</span><span class="o">=</span><span class="sh">"</span><span class="s">none</span><span class="sh">"</span><span class="p">,</span>
+    <span class="n">task_type</span><span class="o">=</span><span class="sh">"</span><span class="s">SEQ_CLS</span><span class="sh">"</span>          <span class="c1"># one of: "SEQ_CLS", "SEQ_REG", "TOKEN_CLS", "TOKEN_REG"
+</span><span class="p">)</span>
+
+<span class="c1"># Wrap the model
+</span><span class="n">peft_model</span> <span class="o">=</span> <span class="nf">get_peft_model</span><span class="p">(</span><span class="n">base_model</span><span class="p">,</span> <span class="n">lora_config</span><span class="p">)</span>
+</code></pre></div></div> <p>Then, use peft_model instead of base_model in the rest of the code. That’s it! This code updates the query and value projection matrices (i.e. <code class="language-plaintext highlighter-rouge">q_proj</code> and <code class="language-plaintext highlighter-rouge">v_proj</code>) using rank-8 matrices. A standard attention head computes</p> \[Q = X\,W_Q\] \[V = X\,W_V\] <p>with $W_Q, W_V\in\mathbb R^{d\times d_k}$, where $d_k$ is the dimension of attention head. With LoRA, instead of learning a full update to $W_Q$, we are introducing</p> <ul> <li>$A_Q\in\mathbb R^{d\times r}$</li> <li>$B_Q\in\mathbb R^{r\times d_k}$</li> </ul> <p>where $r \ll \min(d, d_k)$ is the rank. Using these, we modify the query and value as:</p> \[\begin{aligned} Q &amp;= X\bigl(W_Q + \tfrac{\alpha}{r}B_QA_Q^T\bigr),\\ \end{aligned}\] <p>Similarly, $W_V$ is updated as:</p> \[\begin{aligned} V &amp;= X\bigl(W_V + \tfrac{\alpha}{r}B_VA_V^T\bigr),\\ \end{aligned}\] <p>The hyperparameter $\alpha$ scales the adapter’s effect.</p> <p>During the training, only $A_Q, B_Q, A_V, B_V$ for each attention head are updated. All other weight matrices such as keys, output projections, feed-forward layers, etc. stay frozen during the training.</p> </div> </article> </div> </div> <footer class="fixed-bottom" role="contentinfo"> <div class="container mt-0"> © Copyright 2025 Leerang Yang. Powered by <a href="https://jekyllrb.com/" target="_blank" rel="external nofollow noopener">Jekyll</a> with <a href="https://github.com/alshedivat/al-folio" rel="external nofollow noopener" target="_blank">al-folio</a> theme. Hosted by <a href="https://pages.github.com/" target="_blank" rel="external nofollow noopener">GitHub Pages</a>. </div> </footer> <script src="https://cdn.jsdelivr.net/npm/jquery@3.6.0/dist/jquery.min.js" integrity="sha256-/xUj+3OJU5yExlq6GSYGSHk7tPXikynS7ogEvDej/m4=" crossorigin="anonymous"></script> <script src="/assets/js/bootstrap.bundle.min.js"></script> <script src="https://cdn.jsdelivr.net/npm/mdbootstrap@4.20.0/js/mdb.min.js" integrity="sha256-NdbiivsvWt7VYCt6hYNT3h/th9vSTL4EDWeGs5SN3DA=" crossorigin="anonymous"></script> <script defer src="https://cdn.jsdelivr.net/npm/masonry-layout@4.2.2/dist/masonry.pkgd.min.js" integrity="sha256-Nn1q/fx0H7SNLZMQ5Hw5JLaTRZp0yILA/FRexe19VdI=" crossorigin="anonymous"></script> <script defer src="https://cdn.jsdelivr.net/npm/imagesloaded@5.0.0/imagesloaded.pkgd.min.js" integrity="sha256-htrLFfZJ6v5udOG+3kNLINIKh2gvoKqwEhHYfTTMICc=" crossorigin="anonymous"></script> <script defer src="/assets/js/masonry.js?a0db7e5d5c70cc3252b3138b0c91dcaf" type="text/javascript"></script> <script defer src="https://cdn.jsdelivr.net/npm/medium-zoom@1.1.0/dist/medium-zoom.min.js" integrity="sha256-ZgMyDAIYDYGxbcpJcfUnYwNevG/xi9OHKaR/8GK+jWc=" crossorigin="anonymous"></script> <script defer src="/assets/js/zoom.js?85ddb88934d28b74e78031fd54cf8308"></script> <script src="/assets/js/no_defer.js?2781658a0a2b13ed609542042a859126"></script> <script defer src="/assets/js/common.js?e0514a05c5c95ac1a93a8dfd5249b92e"></script> <script defer src="/assets/js/copy_code.js?c8a01c11a92744d44b093fc3bda915df" type="text/javascript"></script> <script defer src="/assets/js/jupyter_new_tab.js?d9f17b6adc2311cbabd747f4538bb15f"></script> <script async src="https://d1bxh8uas1mnw7.cloudfront.net/assets/embed.js"></script> <script async src="https://badge.dimensions.ai/badge.js"></script> <script defer type="text/javascript" id="MathJax-script" src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-mml-chtml.js" integrity="sha256-MASABpB4tYktI2Oitl4t+78w/lyA+D7b/s9GEP0JOGI=" crossorigin="anonymous"></script> <script src="/assets/js/mathjax-setup.js?a5bb4e6a542c546dd929b24b8b236dfd"></script> <script defer src="https://cdnjs.cloudflare.com/polyfill/v3/polyfill.min.js?features=es6" crossorigin="anonymous"></script> <script defer src="/assets/js/progress-bar.js?2f30e0e6801ea8f5036fa66e1ab0a71a" type="text/javascript"></script> <script src="/assets/js/vanilla-back-to-top.min.js?f40d453793ff4f64e238e420181a1d17"></script> <script>
+    addBackToTop();
+  </script> </body> </html>

@@ -516,7 +516,7 @@ The hyperparameter $\alpha$ scales the adapter’s effect.
 
 During the training, only $A_Q, B_Q, A_V, B_V$ for each attention head are updated. All other weight matrices such as keys, output projections, feed-forward layers, etc. stay frozen during the training.
 
-# Pipeline to bring everything together
+# **Pipeline to bring everything together**
 Now we have defined our model, data module, and trainer; and we covered how to implement PEFT. Bringing everything together will simply look like the following. We already showed an example for getting the tokenizer and datasets, so we will skip that. Here we will assume we want a binary sequence-level classification (e.g. will it be a binder or a non-binder to a given target?)
 
 ```python
@@ -571,5 +571,5 @@ metrics = trainer.evaluate(split="validation")
 
 That's it! It shows how simple fine-tuning pLMs can be when using Huggingface libraries to replace all the grunt work. 
 
-# Next Step
+# **Next Step**
 In the next post, I will go through some training examples

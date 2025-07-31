@@ -10,12 +10,12 @@ related_posts: false
 ---
 
 # **Intro**
-In Part 1 of the post, I went over motivation and intuition for fine-tuning pLMs, distinguished task-adaptive fine-tuning from domain-adaptive pretraining, introduced parameter-efficient fine-tuning, and briefly introduced Huggingface. This post will be go more in-depth on examples of fine-tuning code with Huggingface libraries. Specifically, we will cover:
+In Part 1 of the post, I went over the motivation and intuition for fine-tuning pLMs; distinguished task-adaptive fine-tuning from domain-adaptive pretraining; introduced parameter-efficient fine-tuning; and briefly introduced the Huggingface libraries. This post will be go more in-depth into examples of fine-tuning pLMs with Huggingface libraries. Specifically, we will cover:
 1. **Practical examples and workflow of fine-tuning code with Huggingface libraries**
 2. **Parameter-efficient fine-tuning with Hugginface PEFT library**
 
 # **Code for full parameter fine-tuning**
-Below, I will show the code for four steps necessary for pLM fine-tuning, using Huggingface libraries.
+Below, I will show code examples for four the steps necessary for pLM fine-tuning.
 
 1. Defining the prediction head to be used with pLM
 2. Defining the main model that wires pLM and task model together
@@ -23,7 +23,7 @@ Below, I will show the code for four steps necessary for pLM fine-tuning, using 
 4. Defining the optimizer and trainer
 
 ## **1. Defining the prediction head to be used with pLM**
-For task-adaptive fine-tuning, we need a prediction head. Let’s define `MLPCHead` that can handle both residue-level and protein-level prediction tasks, and both embedding-mean and cls-token pooling strategies if protein-level prediction is used. The MLP architecture is a simple template here, and any other prediction task model (e.g. graph-based models) can be defined similarly. 
+For task-adaptive fine-tuning, we need a prediction head. Let’s define `MLPCHead` that can handle both residue-level and protein-level prediction tasks, and both the embedding-mean and cls-token pooling strategies when protein-level prediction is used. The MLP architecture is a simple template here, and any other prediction task model (e.g. graph-based models) can be defined similarly. 
 
 ```python
 """
@@ -106,9 +106,11 @@ class MLPHead(nn.Module):
 ```
 
 ## **2. Defining the main model**
-Now that we have the prediction head, we need to define a model class that wires the prediction head and pLM together so that we can backpropagate through both during the supervised training. In the below example, we define a model that can be used with both protein-level and residue-level prediction, and both classification and regression tasks. As mentioned in the previous post, each of these cases require different loss functions. To help with this, let's first define `TaskType` Enum class.  
+Now that we have the prediction head, we need to define a model class that wires the prediction head and the pLM together so that we can backpropagate through both in our supervised training. In the below example, we define a model that can be used with both protein-level and residue-level prediction, and both classification and regression tasks. As mentioned in the previous post, each of these cases require different loss functions. To help with this, let's first define `TaskType` Enum class.  
 
 ```python
+from enum import Enum
+
 class TaskType(Enum):
     """
     Enum representing different task types for the prediction head.
@@ -119,7 +121,7 @@ class TaskType(Enum):
     TOKEN_REGRESSION     = "token_regression"
 ```
 
-Now let’s define `PLMTaskModel` class which is our main model. It first uses `AutoModel` to load the specified pre-trained pLM and assign it to `self.backbone`. The `forward()` method first extracts embedding using `self.backbone` and then calls the prediction head using the `last hidden_states`, along with other `kwargs` required by the prediction task model. For example, if the prediciton head is a graph-based model, the graphs may be passed as additional arguments.
+Now let’s define `PLMTaskModel` class which is our main model. It first uses `AutoModel` to load the specified pre-trained pLM and assign it to `self.backbone`. The `forward()` method first extracts embeddings by calling `self.backbone` and then passes them to the prediction head, along with other `kwargs` required by the prediction head. For example, if the prediciton head is a graph-based model, the graphs may be passed as additional arguments.
 
 ```python
 from typing import Optional, Callable, Any
@@ -132,7 +134,7 @@ from transformers import (
     SequenceClassifierOutput,
 )
 
-def PLMTaskModel(PreTrainedModel):
+class PLMTaskModel(PreTrainedModel):
     """General model for sequence/token classification and regression."""
 
     def __init__(
@@ -197,7 +199,7 @@ def PLMTaskModel(PreTrainedModel):
         # Compute loss
         loss = None
         if labels is not None:
-            if self.task_type == TaskType.TOKEN_REGRESSION:
+            if self.task_type is TaskType.TOKEN_REGRESSION:
                 # logits: (batch, seq_len, 1) → squeeze
                 preds = logits.squeeze(-1)                    # (batch, seq_len)
                 # build a mask of the real (non-pad) tokens
@@ -207,14 +209,14 @@ def PLMTaskModel(PreTrainedModel):
                 se    = (preds - labels.float()) ** 2         # (batch, seq_len)
                 loss  = (se * mask).sum() / mask.sum()        # mean over real positions
     
-            elif self.task_type == TaskType.TOKEN_CLASSIFICATION:
+            elif self.task_type is TaskType.TOKEN_CLASSIFICATION:
                     # logits: (batch, seq_len, num_labels)
                 loss = nn.CrossEntropyLoss(ignore_index=-100)(
                     logits.view(-1, logits.size(-1)),
                     labels.view(-1),
                 )
     
-            elif self.task_type == TaskType.SEQ_REGRESSION:
+            elif self.task_type is TaskType.SEQ_REGRESSION:
                     # logits: (batch, 1)
                 loss = nn.MSELoss()(logits.squeeze(-1), labels.float())
     
@@ -235,7 +237,7 @@ def PLMTaskModel(PreTrainedModel):
 Now we have our model. Next, we define our data module.
 
 ## **3. Defining the data module**
-We define the data module that loads, preprocesses, and tokenizes the data. To make it modular and compatible with various pLMs, we use the huggingface `AutoTokenizer` as input so that the appropriate model-specific tokenizer can be passed. It also use `preprocess_fn` as an optional input to handle any model-specific quirk (e.g. for ProtBert model, a function that adds a space between amino acids) inside the data module. We return the training, validation and optional test datasets as Huggingface `Dataset` objects, within a single `DatasetDict` object.
+We define the data module that loads, preprocesses, and tokenizes the data. To make it modular and compatible with various pLMs, we use the huggingface `AutoTokenizer` as input so that the appropriate model-specific tokenizer can be passed. It also uses `preprocess_fn` as an optional input to handle any model-specific quirk inside the data module. We return the training, validation and optional test datasets as Huggingface `Dataset` objects, within a single `DatasetDict` object.
 
 ```python
 from typing import Optional, Callable, List
@@ -312,13 +314,13 @@ class ProteinDataModule:
         return self.datasets
 ```
 
-Here's an example of loading and preprocessing a dataset:
+Here's an example of loading and preprocessing a dataset for ProtBert, which requires sequences to be upper-case letters separated by a space.
 ```python
 """
     Example for creating dataset to be used with ProtBert
 """
 
-# 1. Define a preprocessing function that upper-cases and spaces out residues
+# 1. Define a preprocessing function
 def ProtBert_preprocess(seq: str) -> str:
     """
     Turn a contiguous amino-acid string into uppercase
@@ -328,13 +330,13 @@ def ProtBert_preprocess(seq: str) -> str:
     seq = seq.strip().upper()
     return " ".join(list(seq))
 
-# 2. Load ProtBert’s tokenizer (it expects space-separated amino acids)
+# 2. Load ProtBert’s tokenizer
 tokenizer = AutoTokenizer.from_pretrained(
     "Rostlab/prot_bert",
     do_lower_case=False,
 )
 
-# 3. Instantiate your ProteinDataModule, pointing at CSVs with a "sequence" column
+# 3. Instantiate ProteinDataModule, pointing to the paths of data files
 ProtBert_data_module = ProteinDataModule(
     train_file="data/train.csv",
     val_file="data/val.csv",
@@ -342,7 +344,7 @@ ProtBert_data_module = ProteinDataModule(
     preprocess_fn=ProtBert_preprocess,
     max_length=1024,
     test_file="data/test.csv",     # optional
-)
+) # tokenization is handled automatically
 
 # 4. Get the tokenized DatasetDict
 ProtBert_datasets: DatasetDict = data_module.get_datasets()
@@ -350,11 +352,9 @@ ProtBert_datasets: DatasetDict = data_module.get_datasets()
 
 
 ## **4. Defining the optimizer and trainer**
-Now that we have defined the model and the dataset, we now need to define optimizer and trainer, and optionally a scheduler for the optimizer. While we can do this with Pytorch, once again Hugginface provides a `Trainer` class that simplifies the process. The `Trainer` class in addition enables simplified workflow for distributed training and mixed-precision handling as well.
+Now that we have defined the model and the data module, we need to define optimizer and trainer, and optionally a scheduler, so that we can start training. While we can do this with Pytorch, once again Hugginface provides a `Trainer` class that simplifies the process. Additionally, the `Trainer` class enables simplified workflow for distributed training and mixed-precision handling as well.Moreover, `Trainer` class by default implements AdamW optimizer and a linear scheduler with warmup and decay, so there's no need to explicitly define them. It is highly customizable through the use of `TrainingArguments` class that is supplied as input to the trainer. [Trainer documentation](https://huggingface.co/docs/transformers/en/main_classes/trainer) from Huggingface shows there are **118** parameters that can be passed to TrainingArguments.
 
-`Trainer` class actually by default implements AdamW optimizer and a linear scheduler with warmup and decay, so there's no need to explicitly define them. It is highly customizable through the use of `TrainingArguments` class that is supplied as input to the trainer. [Trainer documentation](https://huggingface.co/docs/transformers/en/main_classes/trainer) from Huggingface shows there are **118** parameters that can be passed to TrainingArguments.
-
-In this example, we will assume that we have written a metrics module with get_compute_metrics_fn that returns appropriate metrics function given the model task type. We use huggingface `DataCollatorWithPadding` or `DataCollatorForTokenClassificaiton` to implement per-batch dynamic padding to the length of the longest sequence in each batch. If we have  We then use huggingface `Trainer` module, with `TrainingArguments` definition. By doing so, we can use pre-defined `trainer.train()` and `trainer.evaluate()` methods to simplify training.
+In this example, we will assume that we have written a metrics module with get_compute_metrics_fn that returns appropriate metrics function given the model task type. We use huggingface `DataCollatorWithPadding` or `DataCollatorForTokenClassificaiton` to implement per-batch dynamic padding to the length of the longest sequence in each batch. We then use huggingface `Trainer` module, with `TrainingArguments` definition. By doing so, we can use pre-defined `trainer.train()` and `trainer.evaluate()` methods to simplify training.
 
 ```python
 """
@@ -369,10 +369,8 @@ from transformers import (
     DataCollatorWithPadding,
     DataCollatorForTokenClassification,
 )
-# from metrics import get_compute_metrics_fn
-from plft.metrics import get_compute_metrics_fn
-from plft.model import PLMTaskModel
-from plft.config import TaskType
+# from our custom 'metrics' module, import get_compute_metrics_fn
+from metrics import get_compute_metrics_fn
 
 class ProteinTaskTrainer:
     """
@@ -399,7 +397,7 @@ class ProteinTaskTrainer:
         self.eval_dataset  = eval_dataset
         self.test_dataset  = test_dataset
 
-        # pick the right collator:
+        # Pick the right collator:
         # for residue-classification, pad labels to -100 so CrossEntropyLoss(ignore_index=-100) skips them
         # for everything else (seq-classification, seq-/residue-regression), plain padding is sufficient
         if self.model.task_type == TaskType.TOKEN_CLASSIFICATION:
@@ -460,7 +458,7 @@ class ProteinTaskTrainer:
 ```
 
 # **Parameter-efficient fine tuning with PEFT library**
-Now that we have defined the model, datamodule, and trainer, we are almost ready for training. But there is one thing still missing: implementing parameter-efficient fine-tuning. In the previous post we briefly mentioned what it is, and that we will focus on Low Rank Adaptation (LoRA) method. Huggingface PEFT library makes the implementation of LoRA incredibly simple, so let's look at the code first. 
+Now that we have defined the model, datamodule, and trainer, we are almost ready for training. But there is one thing still missing: implementing parameter-efficient fine-tuning. In the previous post we briefly mentioned what it is, and that we will focus on the Low Rank Adaptation (LoRA) method. Huggingface PEFT library makes the implementation of LoRA incredibly simple, so let's look at the code first. 
 
 ```python
 from peft import LoraConfig, get_peft_model
@@ -482,7 +480,7 @@ lora_config = LoraConfig(
 peft_model = get_peft_model(base_model, lora_config)
 ```
 
-Then, use peft_model instead of base_model in the rest of the code. That's it! This code updates the query and value projection matrices (i.e. `q_proj` and `v_proj`) using rank-8 matrices. A standard attention head computes
+Then, use peft_model instead of base_model in the rest of the code. That's it! This code updates the query and value projection matrices (i.e. `q_proj` and `v_proj`) using rank-8 matrices. A standard attention head computes the query and value as:
 
 $$
 Q = X\,W_Q
@@ -492,13 +490,13 @@ $$
 V = X\,W_V
 $$
 
-with $W_Q, W_V\in\mathbb R^{d\times d_k}$, where $d_k$ is the dimension of attention head. With LoRA, instead of learning a full update to $W_Q$, we are introducing
+with $W_Q, W_V\in\mathbb R^{d\times d_k}$, where $d$ is the embedding dimension and $d_k$ is the dimension of attention head. With LoRA, instead of learning a full update to $W_Q$, we introduce
 
 * $A_Q\in\mathbb R^{d\times r}$
 * $B_Q\in\mathbb R^{r\times d_k}$
 
 where $r \ll \min(d, d_k)$ is the rank.
-Using these, we modify the query and value as:
+Using these, during the update we modify the query and value as:
 
 $$
 \begin{aligned}
@@ -517,3 +515,61 @@ $$
 The hyperparameter $\alpha$ scales the adapter’s effect.
 
 During the training, only $A_Q, B_Q, A_V, B_V$ for each attention head are updated. All other weight matrices such as keys, output projections, feed-forward layers, etc. stay frozen during the training.
+
+# Pipeline to bring everything together
+Now we have defined our model, data module, and trainer; and we covered how to implement PEFT. Bringing everything together will simply look like the following. We already showed an example for getting the tokenizer and datasets, so we will skip that. Here we will assume we want a binary sequence-level classification (e.g. will it be a binder or a non-binder to a given target?)
+
+```python
+# Defining the model, with LoRA
+INPUT_DIM = 1024              # ProtBert hidden size
+NUM_CLASSES = 2               # binary classifier
+
+head = MLPHead(
+    input_dim           = INPUT_DIM,
+    hidden_dim          = 512,
+    output_dim          = NUM_CLASSES,
+    num_hidden_layers   = 1,
+    dropout_rate        = 0.1,
+    classification_mode = "protein",   # sequence-level
+    pooling_strategy    = "mean",
+)
+
+base_model = PLMTaskModel(
+    task_type    = TaskType.SEQ_CLASSIFICATION,
+    backbone_name= "Rostlab/prot_bert",
+    head         = head,
+)
+
+# Wrap it with LoRA
+lora_config = LoraConfig(
+    r=8,
+    lora_alpha=32,
+    target_modules=["q_proj", "v_proj"],
+    dropout=0.05,
+    bias="none",
+    task_type="SEQ_CLS",
+)
+model = get_peft_model(base_model, lora_config)
+
+# Define Trainer
+trainer = ProteinTaskTrainer(
+    model            = model,
+    train_dataset    = datasets["train"],
+    eval_dataset     = datasets["validation"],
+    test_dataset     = datasets.get("test"),
+    tokenizer        = tokenizer,
+    output_dir       = "outputs/protbert_seqcls",
+    num_train_epochs = 20,
+    per_device_train_batch_size = 4,
+    learning_rate    = 3e-5,
+)
+
+# Train and evaluate
+trainer.train()
+metrics = trainer.evaluate(split="validation")
+```
+
+That's it! It shows how simple fine-tuning pLMs can be when using Huggingface libraries to replace all the grunt work. 
+
+# Next Step
+In the next post, I will go through some training examples

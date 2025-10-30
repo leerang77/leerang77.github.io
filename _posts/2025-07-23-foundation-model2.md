@@ -10,12 +10,12 @@ related_posts: false
 ---
 
 # **Intro**
-In Part 1 of the post, I went over the motivation and intuition for fine-tuning pLMs; distinguished task-adaptive fine-tuning from domain-adaptive pretraining; introduced parameter-efficient fine-tuning; and briefly introduced the Huggingface libraries. This post will be go more in-depth into examples of fine-tuning pLMs with Huggingface libraries. Specifically, we will cover:
+In Part 1 of the post, I went over the motivation and intuition for fine-tuning pLMs; distinguished task-adaptive fine-tuning from domain-adaptive pretraining; introduced parameter-efficient fine-tuning; briefly introduced the Huggingface libraries; and set the goals for allowing various pLMs and prediction head to be used as plug-and-play. This post will be go more in-depth into examples of fine-tuning pLMs with Huggingface libraries. Specifically, I will cover:
 1. **Practical examples and workflow of fine-tuning code with Huggingface libraries**
 2. **Parameter-efficient fine-tuning with Hugginface PEFT library**
 
 # **Code for full parameter fine-tuning**
-Below, I will show code examples for four the steps necessary for pLM fine-tuning.
+Below, I will show code examples for the four steps necessary for pLM fine-tuning.
 
 1. Defining the prediction head to be used with pLM
 2. Defining the main model that wires pLM and task model together
@@ -23,7 +23,7 @@ Below, I will show code examples for four the steps necessary for pLM fine-tunin
 4. Defining the optimizer and trainer
 
 ## **1. Defining the prediction head to be used with pLM**
-For task-adaptive fine-tuning, we need a prediction head. Let’s define `MLPCHead` that can handle both residue-level and protein-level prediction tasks, and both the embedding-mean and cls-token pooling strategies when protein-level prediction is used. The MLP architecture is a simple template here, and any other prediction task model (e.g. graph-based models) can be defined similarly. 
+For task-adaptive fine-tuning, we need a prediction head. Let’s define `MLPHead` that can handle both residue-level and protein-level prediction tasks, and both the embedding-mean and cls-token pooling strategies when protein-level prediction is used. The MLP architecture is a simple template here, and any other prediction task model (e.g. graph-based models) can be defined similarly. 
 
 ```python
 """
@@ -33,14 +33,14 @@ import torch.nn as nn
 
 class MLPHead(nn.Module):
     """Modular MLP head with configurable pooling method.
-    Supports per-protein (mean or CLS) or per-residue classification."""
+    Supports per-protein (mean or CLS pooling) or per-residue classification."""
 
     def __init__(
         self,
         input_dim: int,         # Should match the pLM embedding dimension
         hidden_dim: int,        # Hidden layer dimensions
         output_dim: int,        # Number of classes (1 if regression)
-        num_hidden_layers: int = 1, # Variable number of hidden layers in MLP
+        num_hidden_layers: int = 1, # Number of hidden layers in MLP
         dropout_rate: float = 0.1,  # Dropout rate
         classification_mode: str = "protein", # 'protein' or 'residue'
         pooling_strategy: str = "mean",       # 'mean' or 'cls' when protein-level
@@ -75,7 +75,6 @@ class MLPHead(nn.Module):
         layers.append(nn.Linear(dims[-2], dims[-1]))
         self.mlp = nn.Sequential(*layers)
 
-
     def forward(
         self,
         hidden_states: torch.FloatTensor,
@@ -106,7 +105,7 @@ class MLPHead(nn.Module):
 ```
 
 ## **2. Defining the main model**
-Now that we have the prediction head, we need to define a model class that wires the prediction head and the pLM together so that we can backpropagate through both in our supervised training. In the below example, we define a model that can be used with both protein-level and residue-level prediction, and both classification and regression tasks. As mentioned in the previous post, each of these cases require different loss functions. To help with this, let's first define `TaskType` Enum class.  
+Now that we have the prediction head, we need to define a model class that wires the prediction head and the pLM together so that we can backpropagate through both in our supervised training. In the below example, we define a model that can be used with both protein-level and residue-level predictions, and both classification and regression tasks. As mentioned in the previous post, each of these cases require different loss functions. To help with this, let's first define `TaskType` Enum class.  
 
 ```python
 from enum import Enum
@@ -124,7 +123,7 @@ class TaskType(Enum):
 Now let’s define `PLMTaskModel` class which is our main model. It first uses `AutoModel` to load the specified pre-trained pLM and assign it to `self.backbone`. The `forward()` method first extracts embeddings by calling `self.backbone` and then passes them to the prediction head, along with other `kwargs` required by the prediction head. For example, if the prediciton head is a graph-based model, the graphs may be passed as additional arguments.
 
 ```python
-from typing import Optional, Callable, Any
+from typing import Optional, Any
 
 import torch.nn as nn
 from transformers import (
@@ -151,7 +150,6 @@ class PLMTaskModel(PreTrainedModel):
             task_type (TaskType): Type of the task (e.g., SEQ_CLASSIFICATION, TOKEN_CLASSIFICATION).
             backbone_name (str): Name of the pretrained model backbone.
             head (nn.Module): Task-specific head to be used on top of the backbone.
-            preprocess_fn (Callable[[str], str]): Function to preprocess input sequences.
         """
         # Load the config and backbone
         config = AutoConfig.from_pretrained(backbone_name)
@@ -180,7 +178,9 @@ class PLMTaskModel(PreTrainedModel):
         Args:
             input_ids (torch.LongTensor): Input token IDs.
             attention_mask (Optional[torch.FloatTensor]): Attention mask.
-            labels (Optional[torch.LongTensor]): Labels for classification tasks.
+            labels (Optional[torch.LongTensor]): Labels for the data.
+            output_hidden_states (bool): If true, include the intermediate layer hidden states in output
+            output_attentions (bool): If true, include the intermediate layer attentions in output
             **head_args (Any): Additional arguments for the head.
         Returns:
             SequenceClassifierOutput: Output of the model including logits and loss if labels are provided.
@@ -196,7 +196,7 @@ class PLMTaskModel(PreTrainedModel):
         hidden_states = outputs.last_hidden_state
         logits = self.head(hidden_states, attention_mask=attention_mask, **head_args)
         
-        # Compute loss
+        # Compute loss; loss functions can be changed
         loss = None
         if labels is not None:
             if self.task_type is TaskType.TOKEN_REGRESSION:
@@ -223,7 +223,7 @@ class PLMTaskModel(PreTrainedModel):
             else:  # SEQ_CLASSIFICATION
                     # logits: (batch, num_labels)
                 loss = nn.CrossEntropyLoss()(
-                    logits.view(-1, logits.size(-1)),
+                    logits,
                     labels.view(-1),
                 )
      
@@ -259,12 +259,14 @@ class ProteinDataModule:
         preprocess_fn: Optional[Callable[[str], str]] = None,
         max_length: int = 1024,
         test_file: Optional[str] = None,
+        sequence_column: str = "sequence",
+        label_column: str = "label",
         optional_features: Optional[List[str]] = None,
-
-    ) -> DatasetDict:
+    ):
         """
         Initializes the ProteinDataModule with training and validation files,
         a tokenizer, and optional preprocessing function and optional test file.
+        Input data files should be csv with the column "sequence", and optionally "label"
         Args:
             train_file (str): Path to the training dataset file.
             val_file (str): Path to the validation dataset file.
@@ -272,6 +274,8 @@ class ProteinDataModule:
             preprocess_fn (Optional[Callable[[str], str]]): Function to preprocess sequences.
             max_length (int): Maximum length for tokenized sequences.
             test_file (Optional[str]): Path to the test dataset file, if available.
+            sequence_column (str): Name of the column containing sequences.
+            label_column (str): Name of the column containing labels.
             optional_features (Optional[List[str]]): Additional features to include in the dataset.
         """
         self.tokenizer = tokenizer
@@ -283,24 +287,24 @@ class ProteinDataModule:
             files["test"] = test_file
         raw = load_dataset("csv", data_files=files)
 
-        def preprocess(examples):
+        def preprocess(dataset):
             """
-            Preprocesses the input examples by applying the preprocessing function
+            Preprocesses the input dataset by applying the preprocessing function
             and tokenizing the sequences.
             """
-            seqs = examples["sequence"]
+            seqs = dataset[sequence_column]
             if self.preprocess_fn: # Optional preprocessing step (e.g. Add space for ProtBert)
                 seqs = [self.preprocess_fn(s) for s in seqs]
-            tokenized = self.tokenizer(
+            tokenized = self.tokenizer( # Tokenization
                 seqs,
                 truncation=True,
                 max_length=self.max_length,
             )
-            if "label" in examples:
-                tokenized["labels"] = examples["label"]
-            for key in self.optional_features: # Optional keys for additional features (e.g. graph)
-                if key in examples:
-                    tokenized[key] = examples[key]
+            if label_column in dataset: # Attach labels if available
+                tokenized["label"] = dataset[label_column]
+            for key in self.optional_features: # Optional keys for additional features to keep
+                if key in dataset:
+                    tokenized[key] = dataset[key]
             return tokenized
 
         self.datasets = raw.map(preprocess, batched=True)
@@ -344,17 +348,27 @@ ProtBert_data_module = ProteinDataModule(
     preprocess_fn=ProtBert_preprocess,
     max_length=1024,
     test_file="data/test.csv",     # optional
-) # tokenization is handled automatically
+) 
 
 # 4. Get the tokenized DatasetDict
-ProtBert_datasets: DatasetDict = data_module.get_datasets()
+ProtBert_datasets: DatasetDict = ProtBert_data_module.get_datasets()
 ```
 
 
 ## **4. Defining the optimizer and trainer**
-Now that we have defined the model and the data module, we need to define optimizer and trainer, and optionally a scheduler, so that we can start training. While we can do this with Pytorch, once again Hugginface provides a `Trainer` class that simplifies the process. Additionally, the `Trainer` class enables simplified workflow for distributed training and mixed-precision handling as well.Moreover, `Trainer` class by default implements AdamW optimizer and a linear scheduler with warmup and decay, so there's no need to explicitly define them. It is highly customizable through the use of `TrainingArguments` class that is supplied as input to the trainer. [Trainer documentation](https://huggingface.co/docs/transformers/en/main_classes/trainer) from Huggingface shows there are **118** parameters that can be passed to TrainingArguments.
+Now that we have defined the model and the data module, we need to define optimizer and trainer, and optionally a scheduler, to start training. While we can do this with Pytorch or Pytorch Lightning, once again Hugginface provides a `Trainer` class that simplifies the process so we will use it. The `Trainer` class additionally enables simplified workflow for distributed training and mixed-precision handling. `Trainer` class by default implements AdamW optimizer and a linear scheduler with warmup and decay, so there's no need to explicitly define them; but it is also highly customizable in almost every way through the use of `TrainingArguments` class that is supplied as input to the trainer. [Trainer documentation](https://huggingface.co/docs/transformers/en/main_classes/trainer) from Huggingface shows there are **118** parameters that can be passed to TrainingArguments.
 
-In this example, we will assume that we have written a metrics module with get_compute_metrics_fn that returns appropriate metrics function given the model task type. We use huggingface `DataCollatorWithPadding` or `DataCollatorForTokenClassificaiton` to implement per-batch dynamic padding to the length of the longest sequence in each batch. We then use huggingface `Trainer` module, with `TrainingArguments` definition. By doing so, we can use pre-defined `trainer.train()` and `trainer.evaluate()` methods to simplify training.
+Training requires metrics. In this example, we will assume that we have written a metrics module with get_compute_metrics_fn that returns appropriate metrics function given the model task type. 
+```python
+def get_compute_metrics_fn(task_type: TaskType) -> Callable[[EvalPrediction], Dict[str, float]]:
+    """
+    Return the appropriate metrics function for the given task type.
+    """
+    if task_type is TaskType.SEQ_CLASSIFICATION:
+        return lambda pred: seq_classification_metrics(pred.predictions, pred.label_ids)
+    ...
+```
+We will define our trainer module, `ProteinTaskTrainer`. We use huggingface `Trainer` module, with `TrainingArguments` definition. By doing so, we can use pre-defined `trainer.train()` and `trainer.evaluate()` methods to simplify training. One key argument for the trainer is a data collator for constructing batched tensors from the data. We use huggingface `DataCollatorWithPadding` or `DataCollatorForTokenClassificaiton` to implement per-batch dynamic padding to the length of the longest sequence in each batch. 
 
 ```python
 """
@@ -363,7 +377,6 @@ Trainer Module
 from typing import Optional, Dict
 from datasets import Dataset
 from transformers import (
-    AutoTokenizer,
     Trainer,
     TrainingArguments,
     DataCollatorWithPadding,
@@ -383,14 +396,16 @@ class ProteinTaskTrainer:
         train_dataset: Dataset,
         eval_dataset: Dataset,
         test_dataset: Optional[Dataset],
-        tokenizer: AutoTokenizer,
         output_dir: str,
         num_train_epochs: int = 100,
         per_device_train_batch_size: int = 8,
         learning_rate: float = 1e-4,
+        eval_strategy: str = "epoch",
+        save_strategy: str = "epoch",
     ):
         """
         Initializes the ProteinTaskTrainer with model, datasets, tokenizer, and training parameters.
+
         """
         self.model         = model
         self.train_dataset = train_dataset
@@ -416,8 +431,8 @@ class ProteinTaskTrainer:
             num_train_epochs=num_train_epochs,
             per_device_train_batch_size=per_device_train_batch_size,
             per_device_eval_batch_size=per_device_train_batch_size,
-            eval_strategy="epoch",
-            save_strategy="epoch",
+            eval_strategy=eval_strategy,
+            save_strategy=save_strategy,
             learning_rate=learning_rate,
         )
         self.trainer = Trainer(
@@ -471,7 +486,7 @@ lora_config = LoraConfig(
     lora_alpha=32,               # scaling
     target_modules=["q_proj",    # which modules to inject into
                     "v_proj"],  
-    dropout=0.05,                # optional
+    dropout=0.05,                
     bias="none",
     task_type="SEQ_CLS"          # one of: "SEQ_CLS", "SEQ_REG", "TOKEN_CLS", "TOKEN_REG"
 )
@@ -480,7 +495,9 @@ lora_config = LoraConfig(
 peft_model = get_peft_model(base_model, lora_config)
 ```
 
-Then, use peft_model instead of base_model in the rest of the code. That's it! This code updates the query and value projection matrices (i.e. `q_proj` and `v_proj`) using rank-8 matrices. A standard attention head computes the query and value as:
+Then, use peft_model instead of base_model in the rest of the code. That's it! This code updates the query and value projection matrices (i.e. `q_proj` and `v_proj`) using rank-8 matrices. 
+
+A standard attention head computes the query and value as:
 
 $$
 Q = X\,W_Q
@@ -500,7 +517,7 @@ Using these, during the update we modify the query and value as:
 
 $$
 \begin{aligned}
-Q &= X\bigl(W_Q + \tfrac{\alpha}{r}B_QA_Q^T\bigr),\\
+Q &= X\bigl(W_Q + \tfrac{\alpha}{r}A_QB_Q\bigr),\\
 \end{aligned}
 $$
 
@@ -508,7 +525,7 @@ Similarly, $W_V$ is updated as:
 
 $$
 \begin{aligned}
-V &= X\bigl(W_V + \tfrac{\alpha}{r}B_VA_V^T\bigr),\\
+V &= X\bigl(W_V + \tfrac{\alpha}{r}A_VB_V\bigr),\\
 \end{aligned}
 $$
 
@@ -517,59 +534,137 @@ The hyperparameter $\alpha$ scales the adapter’s effect.
 During the training, only $A_Q, B_Q, A_V, B_V$ for each attention head are updated. All other weight matrices such as keys, output projections, feed-forward layers, etc. stay frozen during the training.
 
 # **Pipeline to bring everything together**
-Now we have defined our model, data module, and trainer; and we covered how to implement PEFT. Bringing everything together will simply look like the following. We already showed an example for getting the tokenizer and datasets, so we will skip that. Here we will assume we want a binary sequence-level classification (e.g. will it be a binder or a non-binder to a given target?)
+Now we have defined our model, data module, and trainer, and we covered how to implement PEFT. Bringing everything together will simply look like the following. We already showed an example for getting the tokenizer and datasets, so we will skip that for brevity. Here we will assume we want a binary sequence-level classification (for example, is the given sequence a binder or a non-binder to a given target?) *The code shown here is a simplified example for clarity; the full code has additional components to define different task head architecture, data preprocessing functions, and handling LoRA options.*
 
+We will use hydra to handle the inputs. We define a config file for the job.
+```yaml
+# Global
+seed: 42
+
+backbone:
+  name: Rostlab/prot_bert
+  task_type: SEQ_CLASSIFICATION
+
+head:
+  hidden_dim: 512
+  output_dim: 2
+  num_hidden_layers: 1
+  dropout_rate: 0.1
+  classification_mode: protein  # or residue
+  pooling_strategy: mean
+
+peft:
+  enabled: true
+  method: lora
+  r: 8
+  alpha: 32
+  target_modules: [q_proj, v_proj]
+  dropout: 0.05
+  bias: none                    # string "none" (YAML 1.2 treats null as 'null' or '~')
+  task_type: SEQ_CLS
+
+trainer:
+  output_dir: outputs/protbert_seqcls
+  num_train_epochs: 20
+  per_device_train_batch_size: 4
+  learning_rate: 1e-4
+  eval_split: validation
+  eval_strategy: epoch
+  save_strategy: epoch
+
+hydra:
+  run:
+    dir: ${trainer.output_dir}
+  job:
+    chdir: true
+```
+
+Now, we can define the main training script that uses the hydra `@main` decorator to read the config and run the training.
 ```python
-# Defining the model, with LoRA
-INPUT_DIM = 1024              # ProtBert hidden size
-NUM_CLASSES = 2               # binary classifier
+from hydra import main
+from omegaconf import DictConfig
+#...Additional imports from previous code snippets...
 
-head = MLPHead(
-    input_dim           = INPUT_DIM,
-    hidden_dim          = 512,
-    output_dim          = NUM_CLASSES,
-    num_hidden_layers   = 1,
-    dropout_rate        = 0.1,
-    classification_mode = "protein",   # sequence-level
-    pooling_strategy    = "mean",
-)
+@main(config_path="configs", config_name="protbert_seqcls.yaml")
+def run(cfg: DictConfig):
+    # Seed
+    seed = cfg.get("seed", 42)
+    seed = int(seed)
+    random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
 
-base_model = PLMTaskModel(
-    task_type    = TaskType.SEQ_CLASSIFICATION,
-    backbone_name= "Rostlab/prot_bert",
-    head         = head,
-)
+    # Backbone + hidden size
+    hf_cfg = AutoConfig.from_pretrained(cfg.backbone.name)
+    hidden_size = getattr(hf_cfg, "hidden_size", None)
+    if hidden_size is None:
+        raise RuntimeError(f"hidden_size not found for backbone '{cfg.backbone.name}'")
 
-# Wrap it with LoRA
-lora_config = LoraConfig(
-    r=8,
-    lora_alpha=32,
-    target_modules=["q_proj", "v_proj"],
-    dropout=0.05,
-    bias="none",
-    task_type="SEQ_CLS",
-)
-model = get_peft_model(base_model, lora_config)
+    # Task type
+    task_type = getattr(TaskType, cfg.backbone.task_type, None)
+    if task_type is None:
+        valid = [k for k in vars(TaskType).keys() if k.isupper()]
+        raise ValueError(f"Unknown TaskType '{cfg.backbone.task_type}'. Valid: {valid}")
 
-# Define Trainer
-trainer = ProteinTaskTrainer(
-    model            = model,
-    train_dataset    = datasets["train"],
-    eval_dataset     = datasets["validation"],
-    test_dataset     = datasets.get("test"),
-    tokenizer        = tokenizer,
-    output_dir       = "outputs/protbert_seqcls",
-    num_train_epochs = 20,
-    per_device_train_batch_size = 4,
-    learning_rate    = 3e-5,
-)
+    # Head
+    input_dim = hidden_size
+    head = MLPHead(
+        input_dim=input_dim,
+        hidden_dim=int(cfg.head.hidden_dim),
+        output_dim=int(cfg.head.output_dim),
+        num_hidden_layers=int(cfg.head.num_hidden_layers),
+        dropout_rate=float(cfg.head.dropout_rate),
+        classification_mode=str(cfg.head.classification_mode),
+        pooling_strategy=str(cfg.head.pooling_strategy),
+    )
 
-# Train and evaluate
-trainer.train()
-metrics = trainer.evaluate(split="validation")
+    # Base model
+    base_model = PLMTaskModel(
+        task_type=task_type,
+        backbone_name=str(cfg.backbone.name),
+        head=head,
+    )
+
+    # Optional LoRA
+    if bool(cfg.peft.enabled):
+        lora_config = LoraConfig(
+            r=int(cfg.peft.r),
+            lora_alpha=int(cfg.peft.alpha),
+            target_modules=list(cfg.peft.target_modules),
+            lora_dropout=float(cfg.peft.dropout),
+            bias=str(cfg.peft.bias),
+            task_type=str(cfg.peft.task_type),
+        )
+        model = get_peft_model(base_model, lora_config)
+    else:
+        model = base_model
+
+    # Trainer
+    trainer = ProteinTaskTrainer(
+        model=model,
+        train_dataset=datasets["train"],
+        eval_dataset=datasets.get("validation"),
+        test_dataset=datasets.get("test"),
+        tokenizer=tokenizer,
+        output_dir=str(cfg.trainer.output_dir),
+        num_train_epochs=int(cfg.trainer.num_train_epochs),
+        per_device_train_batch_size=int(cfg.trainer.per_device_train_batch_size),
+        learning_rate=float(cfg.trainer.learning_rate),
+    )
+
+    # Train + eval
+    trainer.train()
+    metrics = trainer.evaluate(split=str(cfg.trainer.eval_split))
+    print("Eval metrics:", metrics)
+
+
+if __name__ == "__main__":
+    run()
 ```
 
 That's it! It shows how simple fine-tuning pLMs can be when using Huggingface libraries to replace all the grunt work. 
 
 # **Next Step**
-In the next post, I will go through some training examples
+In the next post, I will go through some training examples.

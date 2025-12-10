@@ -10,24 +10,24 @@ related_posts: false
 ---
 
 # **Intro**
-In Part 1 of the post, I went over the motivation and intuition for fine-tuning pLMs; distinguished task-adaptive fine-tuning from domain-adaptive pretraining; introduced parameter-efficient fine-tuning; briefly introduced the Huggingface libraries; and set the goals for allowing various pLMs and prediction head to be used as plug-and-play. This post will be go more in-depth into examples of fine-tuning pLMs with Huggingface libraries. Specifically, I will cover:
-1. **Practical examples and workflow of fine-tuning code with Huggingface libraries**
-2. **Parameter-efficient fine-tuning with Hugginface PEFT library**
+In Part 1 of this post, I discussed the motivation and intuition for fine-tuning pLMs; distinguished task-adaptive fine-tuning from domain-adaptive pretraining; introduced parameter-efficient fine-tuning; briefly covered the Huggingface libraries; and outlined the goals for allowing various pLMs and prediction head to be used as plug-and-play. This post will go more in-depth into examples of fine-tuning pLMs using the Huggingface libraries. Specifically, I will cover:
+1. **Practical code examples and workflow of fine-tuning pLMs using the Huggingface transformer library**
+2. **Parameter-efficient fine-tuning using the Huggingface PEFT library**
 
 # **Code for full parameter fine-tuning**
 Below, I will show code examples for the four steps necessary for pLM fine-tuning.
 
-1. Defining the prediction head to be used with pLM
+1. Defining the prediction task head to be used downstream of the pLM
 2. Defining the main model that wires pLM and task model together
 3. Defining the data module
 4. Defining the optimizer and trainer
 
 ## **1. Defining the prediction head to be used with pLM**
-For task-adaptive fine-tuning, we need a prediction head. Let’s define `MLPHead` that can handle both residue-level and protein-level prediction tasks, and both the embedding-mean and cls-token pooling strategies when protein-level prediction is used. The MLP architecture is a simple template here, and any other prediction task model (e.g. graph-based models) can be defined similarly. 
+For task-adaptive fine-tuning, we need a prediction head. Let’s define `MLPHead` that can handle both the residue-level and protein-level prediction tasks, and both the embedding-mean and cls-token pooling strategies when the protein-level prediction is used. The MLP architecture is a simple template here, and any other prediction task model (e.g. graph-based models) can be defined instead. 
 
 ```python
 """
-Example prediction task model with MLP architecture
+Example prediction task model with the MLP architecture
 """
 import torch.nn as nn
 
@@ -105,7 +105,7 @@ class MLPHead(nn.Module):
 ```
 
 ## **2. Defining the main model**
-Now that we have the prediction head, we need to define a model class that wires the prediction head and the pLM together so that we can backpropagate through both in our supervised training. In the below example, we define a model that can be used with both protein-level and residue-level predictions, and both classification and regression tasks. As mentioned in the previous post, each of these cases require different loss functions. To help with this, let's first define `TaskType` Enum class.  
+Now that we have the prediction head, we need to define the model class that wires the prediction head and the pLM, allowing backpropagation through both during the supervised training. In the below example, we define a model that can handle both protein-level and residue-level predictions, as well as both classification and regression tasks. As mentioned in the previous post, each of these cases requires a different loss functions. To support this, let's first define the `TaskType` Enum class.  /
 
 ```python
 from enum import Enum
@@ -120,7 +120,7 @@ class TaskType(Enum):
     TOKEN_REGRESSION     = "token_regression"
 ```
 
-Now let’s define `PLMTaskModel` class which is our main model. It first uses `AutoModel` to load the specified pre-trained pLM and assign it to `self.backbone`. The `forward()` method first extracts embeddings by calling `self.backbone` and then passes them to the prediction head, along with other `kwargs` required by the prediction head. For example, if the prediciton head is a graph-based model, the graphs may be passed as additional arguments.
+Now let’s define `PLMTaskModel` class which is our main model. Upon initiation, it uses `AutoModel` to load the specified pre-trained pLM and assign it to `self.backbone`. The `forward()` method extracts the embeddings by calling `self.backbone`, and then passes them to the prediction head along with the optional `kwargs` required by the prediction head. For example, if the prediciton head is a graph-based model, the graphs may be passed as additional arguments.
 
 ```python
 from typing import Optional, Any
@@ -171,7 +171,7 @@ class PLMTaskModel(PreTrainedModel):
         output_hidden_states: bool = False,
         output_attentions: bool = False,
         **head_args: Any,
-    ) -> SequenceClassifierOutput:
+    ) -> SequenceClassifierOutput: # For convenience we duck type this to use for all tasks
         """
         Forward pass for the PLMTaskModel.
         
@@ -237,7 +237,7 @@ class PLMTaskModel(PreTrainedModel):
 Now we have our model. Next, we define our data module.
 
 ## **3. Defining the data module**
-We define the data module that loads, preprocesses, and tokenizes the data. To make it modular and compatible with various pLMs, we use the huggingface `AutoTokenizer` as input so that the appropriate model-specific tokenizer can be passed. It also uses `preprocess_fn` as an optional input to handle any model-specific quirk inside the data module. We return the training, validation and optional test datasets as Huggingface `Dataset` objects, within a single `DatasetDict` object.
+We define the data module that loads, preprocesses, and tokenizes the data. To make it modular and compatible with various pLMs, we use the huggingface `AutoTokenizer` as an input so that the appropriate model-specific tokenizer can be passed. It also uses `preprocess_fn` as an optional input to handle any model-specific quirk inside the data module. We return the training, validation and optional test datasets as Huggingface `Dataset` objects, within a single `DatasetDict` object.
 
 ```python
 from typing import Optional, Callable, List
@@ -255,10 +255,10 @@ class ProteinDataModule:
         self,
         train_file: str,
         val_file: str,
-        tokenizer: AutoTokenizer,
-        preprocess_fn: Optional[Callable[[str], str]] = None,
-        max_length: int = 1024,
         test_file: Optional[str] = None,
+        preprocess_fn: Optional[Callable[[str], str]] = None,
+        tokenizer: AutoTokenizer,
+        max_length: int = 1024,
         sequence_column: str = "sequence",
         label_column: str = "label",
         optional_features: Optional[List[str]] = None,
@@ -270,10 +270,10 @@ class ProteinDataModule:
         Args:
             train_file (str): Path to the training dataset file.
             val_file (str): Path to the validation dataset file.
-            tokenizer (AutoTokenizer): Tokenizer for processing sequences.
-            preprocess_fn (Optional[Callable[[str], str]]): Function to preprocess sequences.
-            max_length (int): Maximum length for tokenized sequences.
             test_file (Optional[str]): Path to the test dataset file, if available.
+            preprocess_fn (Optional[Callable[[str], str]]): Function to preprocess sequences.
+            tokenizer (AutoTokenizer): Tokenizer for processing sequences.
+            max_length (int): Maximum length for tokenized sequences.
             sequence_column (str): Name of the column containing sequences.
             label_column (str): Name of the column containing labels.
             optional_features (Optional[List[str]]): Additional features to include in the dataset.
@@ -347,7 +347,6 @@ ProtBert_data_module = ProteinDataModule(
     tokenizer=tokenizer,
     preprocess_fn=ProtBert_preprocess,
     max_length=1024,
-    test_file="data/test.csv",     # optional
 ) 
 
 # 4. Get the tokenized DatasetDict
@@ -356,9 +355,9 @@ ProtBert_datasets: DatasetDict = ProtBert_data_module.get_datasets()
 
 
 ## **4. Defining the optimizer and trainer**
-Now that we have defined the model and the data module, we need to define optimizer and trainer, and optionally a scheduler, to start training. While we can do this with Pytorch or Pytorch Lightning, once again Hugginface provides a `Trainer` class that simplifies the process so we will use it. The `Trainer` class additionally enables simplified workflow for distributed training and mixed-precision handling. `Trainer` class by default implements AdamW optimizer and a linear scheduler with warmup and decay, so there's no need to explicitly define them; but it is also highly customizable in almost every way through the use of `TrainingArguments` class that is supplied as input to the trainer. [Trainer documentation](https://huggingface.co/docs/transformers/en/main_classes/trainer) from Huggingface shows there are **118** parameters that can be passed to TrainingArguments.
+Now that we have defined the model and the data module, we need to define the optimizer and trainer, and optionally a scheduler, to start training. While we can do this with Pytorch or Pytorch Lightning, once again Hugginface provides a `Trainer` class that simplifies the process. The `Trainer` class additionally enables a simplified workflow for distributed training and mixed-precision handling. The `Trainer` class by default implements the AdamW optimizer and a linear scheduler with warmup and decay, so there's no need to explicitly define them; but it is also highly customizable in almost every way through the use of `TrainingArguments` class that is supplied as input to the trainer. [Trainer documentation](https://huggingface.co/docs/transformers/en/main_classes/trainer) from Huggingface shows there are **118 parameters** that can be passed to TrainingArguments.
 
-Training requires metrics. In this example, we will assume that we have written a metrics module with get_compute_metrics_fn that returns appropriate metrics function given the model task type. 
+During the training, we would want to compute some metrics to visualize the progress. In this example, we will assume that we have written a metrics module with `get_compute_metrics_fn` that returns appropriate metrics function given the model task type. 
 ```python
 def get_compute_metrics_fn(task_type: TaskType) -> Callable[[EvalPrediction], Dict[str, float]]:
     """
@@ -368,7 +367,7 @@ def get_compute_metrics_fn(task_type: TaskType) -> Callable[[EvalPrediction], Di
         return lambda pred: seq_classification_metrics(pred.predictions, pred.label_ids)
     ...
 ```
-We will define our trainer module, `ProteinTaskTrainer`. We use huggingface `Trainer` module, with `TrainingArguments` definition. By doing so, we can use pre-defined `trainer.train()` and `trainer.evaluate()` methods to simplify training. One key argument for the trainer is a data collator for constructing batched tensors from the data. We use huggingface `DataCollatorWithPadding` or `DataCollatorForTokenClassificaiton` to implement per-batch dynamic padding to the length of the longest sequence in each batch. 
+We will now define our trainer module, `ProteinTaskTrainer`. We use the huggingface `Trainer` module, with `TrainingArguments` definition. By doing so, we can use pre-defined `trainer.train()` and `trainer.evaluate()` methods to simplify training. One key argument for the trainer is a data collator for constructing batched tensors from the data. We use huggingface `DataCollatorWithPadding` or `DataCollatorForTokenClassificaiton` to implement per-batch dynamic padding to the length of the longest sequence in each batch. 
 
 ```python
 """

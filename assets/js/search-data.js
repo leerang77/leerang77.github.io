@@ -30,7 +30,18 @@ ninja.data = [{
           handler: () => {
             window.location.href = "/cv/";
           },
-        },{id: "post-fine-tuning-protein-language-model-with-huggingface-part-2",
+        },{id: "post-fine-tuning-protein-language-model-with-huggingface-part-3",
+        
+          title: "Fine-tuning protein language model with Huggingface (Part 3)",
+        
+        description: "Code package and training example",
+        section: "Posts",
+        handler: () => {
+          
+            window.location.href = "/blog/2025/foundation-model3/";
+          
+        },
+      },{id: "post-fine-tuning-protein-language-model-with-huggingface-part-2",
         
           title: "Fine-tuning protein language model with Huggingface (Part 2)",
         

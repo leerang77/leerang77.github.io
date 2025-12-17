@@ -237,7 +237,7 @@ class PLMTaskModel(PreTrainedModel):
 Now we have our model. Next, we define our data module.
 
 ## **3. Defining the data module**
-We define the data module that loads, preprocesses, and tokenizes the data. To make it modular and compatible with various pLMs, we use the huggingface `AutoTokenizer` as an input so that the appropriate model-specific tokenizer can be passed. It also uses `preprocess_fn` as an optional input to handle any model-specific quirk inside the data module. We return the training, validation and optional test datasets as Huggingface `Dataset` objects, within a single `DatasetDict` object.
+We define the data module that loads, preprocesses, and tokenizes the data. To make it modular and compatible with various pLMs, we use the Huggingface `AutoTokenizer` as an input so that the appropriate model-specific tokenizer can be passed. It also uses `preprocess_fn` as an optional input to handle any model-specific quirk inside the data module. We return the training, validation and optional test datasets as Huggingface `Dataset` objects, within a single `DatasetDict` object.
 
 ```python
 from typing import Optional, Callable, List
@@ -367,7 +367,7 @@ def get_compute_metrics_fn(task_type: TaskType) -> Callable[[EvalPrediction], Di
         return lambda pred: seq_classification_metrics(pred.predictions, pred.label_ids)
     ...
 ```
-We will now define our trainer module, `ProteinTaskTrainer`. We use the huggingface `Trainer` module, with `TrainingArguments` definition. By doing so, we can use pre-defined `trainer.train()` and `trainer.evaluate()` methods to simplify training. One key argument for the trainer is a data collator for constructing batched tensors from the data. We use huggingface `DataCollatorWithPadding` or `DataCollatorForTokenClassificaiton` to implement per-batch dynamic padding to the length of the longest sequence in each batch. 
+We will now define our trainer module, `ProteinTaskTrainer`. We use the Huggingface `Trainer` module, with `TrainingArguments` definition. By doing so, we can use the pre-defined `trainer.train()` and `trainer.evaluate()` methods to simplify training. One key argument for the trainer is a data collator for constructing batched tensors from the data. We use the Huggingface `DataCollatorWithPadding` or `DataCollatorForTokenClassificaiton` to implement per-batch dynamic padding to the length of the longest sequence in each batch. 
 
 ```python
 """

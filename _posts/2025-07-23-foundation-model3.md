@@ -14,47 +14,84 @@ In [Part 2](https://leerang77.github.io/blog/2025/foundation-model2/) of this se
 
 In this final part, we will share the final code package and examples of training results.
 
-# Code Package
+# **Code Package**
 
-The full code package is available my on my github: [PLM_finetune](https://github.com/leerang77/PLM_finetune). While I have added some additional functionalities and structure, the core components remain the same as what I have described in the previous posts. The installation and usage instructions are available in detail in the `README.md` file. The package aims to offer flexibility in combining various protein language model and task head for fine-tuning easily. It has multiple features that enable this:
-
-1. The task head may perform classification or regression, and can be residue-level or protein-level. A TaskType enum is defined to specify the type of task head. Appropriate loss functions, metric functions, and data collator are automatically selected based on the task type.
-2. For protein-level prediction, both pooled representation and representation from [CLS] token are supported for BERT-like models.
-3. Various protein language models can be used just by passing the checkpoint (e.g. Prot-T5, Prot-BERT, ESM2, variants of ESM2, etc)
-4. Can pass preprocessor to handle model-specific data input requirement (e.g. Prot T5 requires amino acids in sequence to be separated by a space)
-5. Uses hydra for configuration management, making it easy to run experiments with different settings.
+The full code package is available my on my github: [PLM_finetune](https://github.com/leerang77/PLM_finetune). While I have added some additional functionalities and structure, the core components remain the same as what I have described in the previous posts. The installation and usage instructions are available in detail in the `README.md` file.
 
 To very briefly summarize the usage:
 
-### Installation
+## Installation
 Clone the repository and install the package using pip:
 ```bash
 pip install -e .
 ```
 Make sure to also install the required dependencies listed in `requirements.txt` using your package manager of choice. Also make sure that a compatible CUDA version is installed if you plan to use GPU acceleration.
 
-### Data Preparation
+## Data Preparation
 The jupyter notebook `data/prepare_data.ipynb` downloaded and preprocesses the datasets for each of the four residue/protein + classiffication/regression task combinations.
 
-### Config files
-Next, define the config file for the experiment. Example configs are available in the `plft/configs/` folder as .yaml files. You can modify them as needed. Some of the key fields are:
-* `model.train_file`, `model.val_file`, `model.test_file`: paths to the training, validation, and test dataset files.
-* `model.backbone_name`: checkpoint name of the protein language model from Huggingface.
-* `model.preprocess`: optional preprocessing function to handle model-specific quirks for input sequence requirement. When specified, it should be defined in `plft/configs/registries.py`.
-* `model.task_type`: Type of task head to use. Should be one of the `TaskType` enum defined in `plft/enums.py`.
-* `model.freeze_backbone`: whether to freeze the backbone pLM during training.
-* `peft.enabled`: whether to use parameter-efficient fine-tuning (PEFT) or full model fine-tuning.
+## Config files
+Next, define the config file for the experiment. Example configs are available in the `plft/configs/` folder as .yaml files. You can modify them as needed. 
 
-### Running the experiment
-Finally, run the training using the defined config file:
+## Running the experiment
+Finally, run the training using the defined config file, e.g.
 ```bash
-python -m plft.pipeline.py --config-name your_config_file.yaml
+python -m plft.pipeline.py --config-name protbert_chezod_token_regression.yaml trainer.learning_rate=1e-5 trainer.batch_size=16
 ```
-Hydra allows you to easily override any config field from the command line as well. For example, to change the learning rate and batch size, you can run:
-```bash
-python -m plft.pipeline.py --config-name your_config_file.yaml trainer.learning_rate=1e-5 trainer.batch_size=16
-```
-I ran these experiments in Google Colab. For convenience, a sample notebook is provided that demonstrates how to set up and run the training in Google Colab: `test_notebooks/protbert_scl_seq_cls_frozen_backbone.ipynb`. This notebook uses ProtBERT as the backbone pLM, with a classification head for protein-level classification task of subcellular location, and freezes the backbone during training.
 
-# Training Results
-I will highlight two example tasks here. 
+# **Training Results**
+I will highlight two example tasks here: protein-level classification of subcellular location (SCL), and residue-level regression of protein disorder. These example tasks were taken from Schmirler et al. 2024, which took it from other sources. The original sources of the datasets are cited at the end. 
+
+## Dataset
+
+### 1. Protein Subcellular Location (SCL) Classification
+The SCL dataset is downloaded from [FLIP Benchmark Datset](https://github.com/J-SNACKKB/FLIP/tree/main/splits/scl), and are originally from [DeepLoc-1](https://doi.org/10.1093/bioinformatics/btx431) and [DeepLoc-2](https://doi.org/10.1093/nar/gkac278). It contains protein sequences labeled with one of 10 subcellular locations: Cytoplasm, Nucleus, Cell membrane, Mitochondrion, Endoplasmic reticulum, Lysosome/Vacuole, Golgi apparatus, Peroxisome, Extracellular and Plastid.
+<div class="row justify-content-center mt-3">
+  <div class="col-md-6">
+    {% include figure.liquid loading="eager" path="assets/img/2025-07-23-foundation-model/SCL.jpg" class="img-fluid" %}
+    <div class="caption mt-2 text-center">
+      Figure 1: Distributioon of protein subcellular locations in the SCL dataset.
+    </div>
+  </div>
+</div>
+
+We used the ProtBert model as the backbone pLM, and fine-tuned it using LoRA for the SCL classification task. We compared its performance against a frozen backbone ProtBert with an MLP head. The results are shown in Figure 1. We can see that the LoRA fine-tuned ProtBert outperforms the frozen backbone ProtBert with MLP head across the eval loss, accuracy, and F1 metrics. 
+
+<div class="row justify-content-center mt-3">
+  <div class="col-md-6">
+    {% include figure.liquid loading="eager" path="assets/img/2025-07-23-foundation-model/SCL_plots.jpg" class="img-fluid" %}
+    <div class="caption mt-2 text-center">
+      Figure 2: Comparing the performance of LoRA fine-tuned ProtBert against frozen backbone ProtBert with MLP head, on the SCL classification task.
+    </div>
+  </div>
+</div>
+
+
+### 2. Residue Disorder Regression
+The SETH dataset quantifies residue disorder from NMR chemical shifts. This dataset originates from the CheZOD1174 subset of the [SETH project](https://doi.org/10.3389/fbinf.2022.1019597). For each residue, SETH computes a Z-score of the observed NMR chemical shift deviation from typical structured values.
+
+* Low order score ( < 8) → intrinsically disordered residue or flexible region 
+* High order score (> 8) → ordered residue (stable secondary structure)
+
+
+<div class="row justify-content-center mt-3">
+  <div class="col-md-6">
+    {% include figure.liquid loading="eager" path="assets/img/2025-07-23-foundation-model/Chezod.jpg" class="img-fluid" %}
+    <div class="caption mt-2 text-center">
+      Figure 3. Distribution of residue disorder scores in the SETH dataset.
+    </div>
+  </div>
+</div>
+
+We again used the ProtBert model as the backbone pLM, and fine-tuned it using LoRA for the residue disorder regression task. The results are shown in Figure 4. We can see that again, the LoRA fine-tuned ProtBert outperforms the frozen backbone ProtBert with MLP head for the mean absolute error. 
+
+<div class="row justify-content-center mt-3">
+  <div class="col-md-6">
+    {% include figure.liquid loading="eager" path="assets/img/2025-07-23-foundation-model/Chezod_plots.jpg" class="img-fluid" %}
+    <div class="caption mt-2 text-center">
+      Figure 4: Comparing the performance of LoRA fine-tuned ProtBert against frozen backbone ProtBert with MLP head, on the residue disorder regression task.
+    </div>
+  </div>
+</div>
+
+# **Citations**

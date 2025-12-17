@@ -47,7 +47,7 @@ I will highlight two example tasks here: protein-level classification of subcell
 ### 1. Protein Subcellular Location (SCL) Classification
 The SCL dataset is downloaded from [FLIP Benchmark Datset](https://github.com/J-SNACKKB/FLIP/tree/main/splits/scl), and are originally from [DeepLoc-1](https://doi.org/10.1093/bioinformatics/btx431) and [DeepLoc-2](https://doi.org/10.1093/nar/gkac278). It contains protein sequences labeled with one of 10 subcellular locations: Cytoplasm, Nucleus, Cell membrane, Mitochondrion, Endoplasmic reticulum, Lysosome/Vacuole, Golgi apparatus, Peroxisome, Extracellular and Plastid.
 <div class="row justify-content-center mt-3">
-  <div class="col-md-6">
+  <div class="col-md-8">
     {% include figure.liquid loading="eager" path="assets/img/2025-07-23-foundation-model/SCL.jpg" class="img-fluid" %}
     <div class="caption mt-2 text-center">
       Figure 1: Distributioon of protein subcellular locations in the SCL dataset.
@@ -58,7 +58,7 @@ The SCL dataset is downloaded from [FLIP Benchmark Datset](https://github.com/J-
 We used the ProtBert model as the backbone pLM, and fine-tuned it using LoRA for the SCL classification task. We compared its performance against a frozen backbone ProtBert with an MLP head. The results are shown in Figure 1. We can see that the LoRA fine-tuned ProtBert outperforms the frozen backbone ProtBert with MLP head across the eval loss, accuracy, and F1 metrics. 
 
 <div class="row justify-content-center mt-3">
-  <div class="col-md-6">
+  <div class="col-md-12">
     {% include figure.liquid loading="eager" path="assets/img/2025-07-23-foundation-model/SCL_plots.jpg" class="img-fluid" %}
     <div class="caption mt-2 text-center">
       Figure 2: Comparing the performance of LoRA fine-tuned ProtBert against frozen backbone ProtBert with MLP head, on the SCL classification task.
@@ -75,7 +75,7 @@ The SETH dataset quantifies residue disorder from NMR chemical shifts. This data
 
 
 <div class="row justify-content-center mt-3">
-  <div class="col-md-6">
+  <div class="col-md-8">
     {% include figure.liquid loading="eager" path="assets/img/2025-07-23-foundation-model/Chezod.jpg" class="img-fluid" %}
     <div class="caption mt-2 text-center">
       Figure 3. Distribution of residue disorder scores in the SETH dataset.
@@ -86,7 +86,7 @@ The SETH dataset quantifies residue disorder from NMR chemical shifts. This data
 We again used the ProtBert model as the backbone pLM, and fine-tuned it using LoRA for the residue disorder regression task. The results are shown in Figure 4. We can see that again, the LoRA fine-tuned ProtBert outperforms the frozen backbone ProtBert with MLP head for the mean absolute error. 
 
 <div class="row justify-content-center mt-3">
-  <div class="col-md-6">
+  <div class="col-md-8">
     {% include figure.liquid loading="eager" path="assets/img/2025-07-23-foundation-model/Chezod_plots.jpg" class="img-fluid" %}
     <div class="caption mt-2 text-center">
       Figure 4: Comparing the performance of LoRA fine-tuned ProtBert against frozen backbone ProtBert with MLP head, on the residue disorder regression task.
